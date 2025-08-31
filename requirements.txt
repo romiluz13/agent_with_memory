@@ -1,0 +1,55 @@
+# Core dependencies for AI Agent Boilerplate
+# Install with: pip install -r requirements.txt
+
+# Core LangGraph and LangChain (MongoDB official versions)
+langgraph>=0.2.0
+langgraph-checkpoint-mongodb>=0.1.0
+langgraph-store-mongodb>=0.1.0  # MongoDB's new store for long-term memory
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-mongodb>=0.2.0  # MongoDB's official LangChain integration
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0
+langchain-google-genai>=2.0.0
+langchain-voyageai>=0.1.0  # Voyage AI for embeddings
+
+# MongoDB and storage
+motor>=3.6.0  # Async MongoDB driver
+pymongo>=4.8.0
+redis[hiredis]>=5.1.0
+
+# FastAPI and web
+fastapi>=0.115.0
+uvicorn[standard]>=0.31.0
+websockets>=13.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.12
+httpx>=0.27.0
+slowapi>=0.1.9
+
+# AI and embeddings
+openai>=1.50.0
+anthropic>=0.34.0
+google-generativeai>=0.8.0
+tiktoken>=0.8.0  # For token counting (MongoDB pattern)
+
+# Document processing
+pypdf>=5.0.0
+python-docx>=1.1.0
+beautifulsoup4>=4.12.3
+markdownify>=0.13.0
+
+# Monitoring and observability
+# galileo-observe>=1.0.0  # Galileo AI for LLM observability (optional - install separately if needed)
+structlog>=24.4.0
+
+# Utilities
+python-dotenv>=1.0.1
+tenacity>=9.0.0
+pendulum>=3.0.0
+orjson>=3.10.0
+aiofiles>=24.1.0
