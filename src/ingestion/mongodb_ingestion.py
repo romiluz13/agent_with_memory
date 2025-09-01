@@ -24,7 +24,7 @@ class IngestionConfig:
     chunk_size: int = 1000  # MongoDB's recommended chunk size
     chunk_overlap: int = 200  # MongoDB's recommended overlap
     embedding_model: str = "voyage-3-large"
-    embedding_dimensions: int = 2048
+    embedding_dimensions: int = 1024
     batch_size: int = 10  # For batch embedding generation
 
 

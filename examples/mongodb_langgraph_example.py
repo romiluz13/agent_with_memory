@@ -77,7 +77,7 @@ async def main():
         model_provider="openai",
         model_name="gpt-4o",
         embedding_model="voyage-3-large",
-        embedding_dimensions=2048
+        embedding_dimensions=1024
     )
     
     # Create vector indexes for agent

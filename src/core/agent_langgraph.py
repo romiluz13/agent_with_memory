@@ -45,7 +45,7 @@ class MongoDBLangGraphAgent:
         model_provider: str = "openai",
         model_name: str = "gpt-4o",
         embedding_model: str = "voyage-3-large",
-        embedding_dimensions: int = 2048,
+        embedding_dimensions: int = 1024,
         database_name: str = "ai_agent_boilerplate"
     ):
         """
@@ -74,15 +74,9 @@ class MongoDBLangGraphAgent:
             # Note: VoyageAI embeddings have fixed dimensions per model
         )
         
-        # Get actual embedding dimensions from the model
-        # Voyage-2: 1024, Voyage-3-large: 2048
-        if embedding_model == "voyage-2":
-            self.embedding_dimensions = 1024
-        elif embedding_model == "voyage-3-large":
-            self.embedding_dimensions = 2048
-        else:
-            # Default to 1024 for most Voyage models
-            self.embedding_dimensions = 1024
+        # Standardize all Voyage models to 1024 dimensions for consistency
+        # This ensures compatibility across all vector operations
+        self.embedding_dimensions = 1024
         
         # Initialize LLM
         self.llm = self._create_llm(model_provider, model_name)
