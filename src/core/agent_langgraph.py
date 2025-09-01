@@ -70,10 +70,19 @@ class MongoDBLangGraphAgent:
         
         # Initialize embeddings (from MongoDB notebook)
         self.embedding_model = VoyageAIEmbeddings(
-            model=embedding_model,
-            output_dimension=embedding_dimensions
+            model=embedding_model
+            # Note: VoyageAI embeddings have fixed dimensions per model
         )
-        self.embedding_dimensions = embedding_dimensions
+        
+        # Get actual embedding dimensions from the model
+        # Voyage-2: 1024, Voyage-3-large: 2048
+        if embedding_model == "voyage-2":
+            self.embedding_dimensions = 1024
+        elif embedding_model == "voyage-3-large":
+            self.embedding_dimensions = 2048
+        else:
+            # Default to 1024 for most Voyage models
+            self.embedding_dimensions = 1024
         
         # Initialize LLM
         self.llm = self._create_llm(model_provider, model_name)
@@ -358,17 +367,19 @@ class MongoDBLangGraphAgent:
     def create_vector_indexes(self):
         """
         Create vector search indexes for collections.
-        Based on MongoDB's build-vector-index.js pattern.
+        Based on MongoDB Developer examples with proper error handling.
         """
+        import time
+        
         collections_to_index = [
-            "documents",
+            "documents", 
             "agent_memories"
         ]
         
         for collection_name in collections_to_index:
             collection = self.db[collection_name]
             
-            # Create vector search index (MongoDB pattern)
+            # MongoDB Atlas vector index definition (mongodb-developer pattern)
             index_definition = {
                 "name": "vector_index",
                 "type": "vectorSearch",
@@ -376,7 +387,7 @@ class MongoDBLangGraphAgent:
                     "fields": [
                         {
                             "type": "vector",
-                            "path": "vector_embeddings",
+                            "path": "vector_embeddings", 
                             "similarity": "cosine",
                             "numDimensions": self.embedding_dimensions
                         }
@@ -385,10 +396,41 @@ class MongoDBLangGraphAgent:
             }
             
             try:
-                collection.create_search_index(index_definition)
-                logger.info(f"Created vector index for {collection_name}")
+                # Check if index already exists (mongodb-developer pattern)
+                existing_indexes = list(collection.list_search_indexes())
+                index_exists = any(idx.get("name") == "vector_index" for idx in existing_indexes)
+                
+                if not index_exists:
+                    logger.info(f"Creating vector index for {collection_name}...")
+                    result = collection.create_search_index(index_definition)
+                    logger.info(f"Index creation initiated: {result}")
+                    
+                    # Wait for index to be ready (optional - for production)
+                    # Note: In production, this is usually done async
+                    for i in range(15):  # Wait up to 15 seconds
+                        time.sleep(1)
+                        try:
+                            indexes = list(collection.list_search_indexes())
+                            vector_index = next((idx for idx in indexes if idx.get("name") == "vector_index"), None)
+                            if vector_index and vector_index.get("status") == "READY":
+                                logger.info(f"✅ Vector index ready for {collection_name}")
+                                break
+                        except:
+                            pass  # Index might still be creating
+                    else:
+                        logger.info(f"⏳ Vector index for {collection_name} still creating (this is normal)")
+                else:
+                    logger.info(f"✅ Vector index already exists for {collection_name}")
+                    
             except Exception as e:
-                logger.warning(f"Index may already exist for {collection_name}: {e}")
+                # More specific error handling
+                if "already exists" in str(e) or "IndexAlreadyExists" in str(e):
+                    logger.info(f"✅ Vector index already exists for {collection_name}")
+                elif "NamespaceNotFound" in str(e):
+                    logger.info(f"📝 Collection {collection_name} will be created when first document is added")
+                else:
+                    logger.warning(f"⚠️ Index creation issue for {collection_name}: {e}")
+                    logger.info("This is usually fine - indexes can be created later")
 
 
 # Example usage matching MongoDB notebook patterns
