@@ -37,6 +37,10 @@ anthropic>=0.34.0
 google-generativeai>=0.8.0
 tiktoken>=0.8.0  # For token counting (MongoDB pattern)
 
+# MCP (Model Context Protocol) support
+langchain-mcp-adapters>=0.1.9
+mcp>=1.9.2  # Core MCP protocol
+
 # Document processing
 pypdf>=5.0.0
 python-docx>=1.1.0

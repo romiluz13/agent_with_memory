@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from langgraph.graph import StateGraph, END
 # from langgraph.checkpoint.base import BaseCheckpointer  # Import issue - will be fixed
-from langgraph.prebuilt import ToolExecutor, ToolInvocation
+from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_core.language_models import BaseChatModel
@@ -20,6 +20,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ..memory.manager import MemoryManager, MemoryConfig
 from ..memory.base import MemoryType
+from ..tools.mcp_toolkit import MCPToolkit
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ class AgentConfig:
     enable_streaming: bool = True
     timeout_seconds: int = 30
     max_iterations: int = 10
+    mcp_servers: Optional[List[str]] = None  # MCP server commands
+    enable_mcp: bool = True  # Enable MCP tools loading
 
 
 class BaseAgent:
@@ -81,7 +84,13 @@ class BaseAgent:
         
         # Initialize tools
         self.tools = config.tools or []
-        self.tool_executor = ToolExecutor(self.tools) if self.tools else None
+        self.mcp_toolkit = None
+        
+        # Initialize MCP tools if enabled
+        if config.enable_mcp and config.mcp_servers:
+            self._initialize_mcp_tools()
+        
+        self.tool_node = ToolNode(self.tools) if self.tools else None
         
         # Build the graph
         self.graph = self._build_graph()
@@ -91,7 +100,52 @@ class BaseAgent:
         self.created_at = datetime.utcnow()
         self.conversation_count = 0
         
-        logger.info(f"Initialized agent: {self.agent_id}")
+        logger.info(f"Initialized agent: {self.agent_id} with {len(self.tools)} tools")
+    
+    def _initialize_mcp_tools(self):
+        """Initialize MCP tools asynchronously."""
+        import asyncio
+        
+        try:
+            logger.info(f"Loading MCP tools from {len(self.config.mcp_servers)} servers")
+            self.mcp_toolkit = MCPToolkit(self.config.mcp_servers)
+            
+            # Run async load in sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                mcp_tools = loop.run_until_complete(self.mcp_toolkit.load_tools())
+                if mcp_tools:
+                    self.tools.extend(mcp_tools)
+                    logger.info(f"Successfully loaded {len(mcp_tools)} MCP tools")
+                else:
+                    logger.warning("No MCP tools were loaded")
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP tools: {e}")
+            # Don't crash - graceful degradation
+            self.mcp_toolkit = None
+    
+    async def _initialize_mcp_tools_async(self):
+        """Async version for MCP tools initialization."""
+        if not self.config.enable_mcp or not self.config.mcp_servers:
+            return
+            
+        try:
+            if not self.mcp_toolkit:
+                self.mcp_toolkit = MCPToolkit(self.config.mcp_servers)
+            
+            mcp_tools = await self.mcp_toolkit.load_tools()
+            if mcp_tools:
+                self.tools.extend(mcp_tools)
+                # Recreate tool executor with new tools
+                self.tool_node = ToolNode(self.tools) if self.tools else None
+                logger.info(f"Async loaded {len(mcp_tools)} MCP tools")
+                
+        except Exception as e:
+            logger.error(f"Failed to async initialize MCP tools: {e}")
     
     def _create_llm(self) -> BaseChatModel:
         """Create the language model based on configuration."""
@@ -240,13 +294,14 @@ class BaseAgent:
             results = []
             for tool_call in state["tool_calls"]:
                 # Create tool invocation
-                tool_invocation = ToolInvocation(
-                    tool=tool_call["name"],
-                    tool_input=tool_call["arguments"]
-                )
+                # Create tool input for the ToolNode
+                tool_input = {
+                    "name": tool_call["name"],
+                    "args": tool_call["arguments"]
+                }
                 
                 # Execute tool
-                result = await self.tool_executor.ainvoke(tool_invocation)
+                result = await self.tool_node.ainvoke(tool_input)
                 results.append(result)
             
             state["context"]["tool_results"] = results

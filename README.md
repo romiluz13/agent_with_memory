@@ -108,17 +108,68 @@ agent.memory.cache.get("common_database_questions")
 ## 🚀 Features
 
 - **🔥 MongoDB + LangGraph**: Official integration patterns
-- **🧠 Sophisticated Memory**: 5-component memory system  
 - **🧠 Sophisticated Memory**: 5-component memory system that actually learns
-- **🔥 MongoDB + LangGraph**: Production-tested integration patterns
 - **🎯 AgentBuilder**: Pre-built agent templates for instant deployment
 - **⚡ Vector Search**: Semantic memory recall with MongoDB Atlas
 - **🔧 Dynamic Configuration**: Custom tools & system prompts without code changes
 - **🔍 Observability**: Galileo AI for LLM monitoring
 - **🛠️ Production Ready**: FastAPI, Docker, comprehensive testing
 - **📚 Document Ingestion**: PDF processing for knowledge base creation
+- **🔌 MCP Support**: Model Context Protocol for 100+ external tools
+- **🌊 Streaming**: Real-time responses via WebSocket and SSE
 
-## 🎯 NEW: AgentBuilder - Instant Agents
+## 🔌 NEW: MCP (Model Context Protocol) Support
+
+Connect your agents to 100+ external tools with zero code:
+
+### What is MCP?
+MCP is an open protocol by Anthropic that standardizes how AI agents connect to external tools. Think of it as "USB for AI tools" - plug and play!
+
+### Available MCP Tools
+- **File System**: Read, write, and manage files
+- **GitHub**: Search repos, create issues, manage PRs
+- **Brave Search**: Web search capabilities
+- **PostgreSQL**: Database queries and management
+- **Slack**: Send messages and manage channels
+- **Google Drive**: Document management
+- **Puppeteer**: Web automation and scraping
+- **Memory**: Additional persistent memory layers
+- And 100+ more community tools!
+
+### Quick Setup
+```python
+from src.core.agent import BaseAgent, AgentConfig
+
+# Enable MCP in your agent config
+config = AgentConfig(
+    name="mcp_agent",
+    enable_mcp=True,
+    mcp_servers=[
+        "npx @modelcontextprotocol/server-filesystem",
+        "npx @modelcontextprotocol/server-github",
+        "npx @modelcontextprotocol/server-brave-search"
+    ]
+)
+
+# That's it! Your agent now has access to all MCP tools
+agent = BaseAgent(config, memory_manager)
+
+# Use MCP tools naturally
+response = await agent.ainvoke("Search GitHub for langchain examples")
+```
+
+### Configuration
+Add to your `.env`:
+```bash
+MCP_ENABLED=true
+MCP_SERVERS="npx @modelcontextprotocol/server-filesystem,npx @modelcontextprotocol/server-github"
+MCP_GITHUB_TOKEN=your_github_token  # Optional: for GitHub MCP
+MCP_BRAVE_API_KEY=your_brave_key    # Optional: for Brave search
+```
+
+See `MCP_AGENT_EXAMPLE.py` for a complete working example!
+
+## 🎯 AgentBuilder - Instant Agents
 
 Create specialized agents in seconds:
 
