@@ -2,7 +2,7 @@
 
 Production-ready AI agent framework with sophisticated 5-component memory system, built on MongoDB Atlas and LangGraph.
 
-## 🌐 **[View Landing Page →]([./website/README.md](https://agentwithmemory.replit.app/))**
+## 🌐 **[View Landing Page →]([https://agentwithmemory.replit.app/]**
 
 **Experience the full showcase of features, comparisons, and live demos at our beautiful landing page.**
 
