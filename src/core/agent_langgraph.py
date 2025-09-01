@@ -45,8 +45,9 @@ class MongoDBLangGraphAgent:
         model_provider: str = "openai",
         model_name: str = "gpt-4o",
         embedding_model: str = "voyage-3-large",
-        embedding_dimensions: int = 1024,
-        database_name: str = "ai_agent_boilerplate"
+        database_name: str = "ai_agent_boilerplate",
+        system_prompt: Optional[str] = None,
+        user_tools: Optional[List] = None
     ):
         """
         Initialize the agent with MongoDB connection.
@@ -57,26 +58,27 @@ class MongoDBLangGraphAgent:
             model_provider: LLM provider (openai, anthropic, google)
             model_name: Model name
             embedding_model: Voyage AI embedding model
-            embedding_dimensions: Embedding vector dimensions
             database_name: MongoDB database name
+            system_prompt: Custom system prompt for the agent's persona
+            user_tools: List of custom tools for the agent to use
         """
         self.mongodb_uri = mongodb_uri
         self.agent_name = agent_name
         self.database_name = database_name
+        self.system_prompt = system_prompt or (
+            "You are a helpful AI assistant with memory capabilities."
+            " You can save important information and retrieve past memories."
+            " Think step-by-step and use your tools when needed."
+            " You have access to the following tools: {tool_names}."
+        )
         
         # Initialize MongoDB client
         self.client = MongoClient(mongodb_uri)
         self.db = self.client[database_name]
         
         # Initialize embeddings (from MongoDB notebook)
-        self.embedding_model = VoyageAIEmbeddings(
-            model=embedding_model
-            # Note: VoyageAI embeddings have fixed dimensions per model
-        )
-        
-        # Standardize all Voyage models to 1024 dimensions for consistency
-        # This ensures compatibility across all vector operations
-        self.embedding_dimensions = 1024
+        self.embedding_model = VoyageAIEmbeddings(model=embedding_model)
+        self.embedding_dimensions = 1024  # Standard dimension for all embeddings
         
         # Initialize LLM
         self.llm = self._create_llm(model_provider, model_name)
@@ -87,8 +89,8 @@ class MongoDBLangGraphAgent:
         # Initialize store for long-term memory
         self.memory_store = self._create_memory_store()
         
-        # Define tools
-        self.tools = self._create_tools()
+        # Define tools, including user-provided ones
+        self.tools = self._create_tools(user_tools or [])
         
         # Build the graph
         self.graph = self._build_graph()
@@ -127,9 +129,11 @@ class MongoDBLangGraphAgent:
         
         return store
     
-    def _create_tools(self) -> List:
-        """Create agent tools (from MongoDB notebook)."""
-        tools = []
+    def _create_tools(self, user_tools: List) -> List:
+        """Create agent tools, combining built-in and user-provided tools."""
+        
+        # Your boilerplate's built-in memory tools
+        built_in_tools = []
         
         # Tool to save important interactions to memory
         @tool
@@ -204,8 +208,11 @@ class MongoDBLangGraphAgent:
             context = "\n\n".join([f"{doc.metadata.get('title', 'Doc')}: {doc.page_content}" for doc in results])
             return context
         
-        tools.extend([save_memory, retrieve_memories, vector_search])
-        return tools
+        built_in_tools.extend([save_memory, retrieve_memories, vector_search])
+        
+        # Add user-provided tools
+        all_tools = built_in_tools + user_tools
+        return all_tools
     
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow (from MongoDB notebook)."""
@@ -214,10 +221,7 @@ class MongoDBLangGraphAgent:
             [
                 (
                     "system",
-                    "You are a helpful AI assistant with memory capabilities."
-                    " You can save important information and retrieve past memories."
-                    " Think step-by-step and use your tools when needed."
-                    " You have access to the following tools: {tool_names}."
+                    self.system_prompt
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
