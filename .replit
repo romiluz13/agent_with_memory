@@ -1,0 +1,12 @@
+modules = ["nodejs-20", "web"]
+run = "cd website && npm install && npm run build && npm run start"
+
+[deployment]
+run = ["sh", "-c", "cd website && npm install && npm run build && npm run start"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[env]
+NODE_ENV = "production"

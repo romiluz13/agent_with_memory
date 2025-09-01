@@ -1,8 +1,8 @@
 modules = ["nodejs-20", "web"]
-run = "npm run dev"
+run = "npm install && npm run build && npm run start"
 
 [deployment]
-run = ["sh", "-c", "npm run build && npm run start"]
+run = ["sh", "-c", "npm install && npm run build && npm run start"]
 
 [[ports]]
 localPort = 3000
