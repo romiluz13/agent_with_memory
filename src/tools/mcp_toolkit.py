@@ -54,17 +54,41 @@ class MCPToolkit:
         try:
             logger.info(f"Loading MCP tools from: {server}")
             
-            # Load tools using the official adapter
-            tools = await load_mcp_tools(server)
+            # Parse the server command
+            import shlex
+            from mcp import StdioServerParameters
+            from mcp.client.stdio import stdio_client
             
-            if tools:
-                logger.info(f"Successfully loaded {len(tools)} tools from {server}")
-                self.loaded_servers[server] = True
-                return tools
-            else:
-                logger.warning(f"No tools loaded from {server}")
-                self.loaded_servers[server] = False
-                return []
+            # Parse command into parts
+            parts = shlex.split(server)
+            command = parts[0]
+            args = parts[1:] if len(parts) > 1 else []
+            
+            # Create server parameters
+            server_params = StdioServerParameters(
+                command=command,
+                args=args,
+                env=None
+            )
+            
+            # Create session and load tools
+            async with stdio_client(server_params) as (read, write):
+                from mcp import ClientSession
+                session = ClientSession(read, write)
+                
+                await session.initialize()
+                
+                # Load tools using the session
+                tools = await load_mcp_tools(session)
+                
+                if tools:
+                    logger.info(f"Successfully loaded {len(tools)} tools from {server}")
+                    self.loaded_servers[server] = True
+                    return tools
+                else:
+                    logger.warning(f"No tools loaded from {server}")
+                    self.loaded_servers[server] = False
+                    return []
                 
         except Exception as e:
             logger.error(f"Failed to load MCP tools from {server}: {e}")
