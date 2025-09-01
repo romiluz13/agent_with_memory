@@ -152,6 +152,11 @@ ipython_config.py
 planning/
 docs/TEMPORAL_EVALUATION.md
 test_setup.py
+
+# Website (separate deployment)
+website/node_modules/
+website/.next/
+website/dist/
 scripts/setup.py
 SETUP_COMPLETE.md
 
@@ -161,3 +166,13 @@ SETUP_COMPLETE.md
 # Monitoring data
 prometheus_data/
 grafana_data/
+
+# Planning and personal files (do not push)
+LINKEDIN_POST.md
+launch-website.sh
+*_test.py
+*_demo.py
+*_planning.md
+*_notes.md
+todo.md
+TEMP_*.md

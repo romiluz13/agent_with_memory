@@ -2,6 +2,10 @@
 
 Production-ready AI agent framework with sophisticated 5-component memory system, built on MongoDB Atlas and LangGraph.
 
+## 🌐 **[View Landing Page →](./website/README.md)**
+
+**Experience the full showcase of features, comparisons, and live demos at our beautiful landing page.**
+
 ## 🎯 Why Memory Matters for AI Agents
 
 Traditional LLMs forget everything between conversations. This boilerplate solves that with a **persistent, searchable memory system** that enables:
