@@ -129,7 +129,6 @@ MCP is an open protocol by Anthropic that standardizes how AI agents connect to 
 - **File System**: Read, write, and manage files
 - **GitHub**: Search repos, create issues, manage PRs
 - **Brave Search**: Web search capabilities
-- **PostgreSQL**: Database queries and management
 - **Slack**: Send messages and manage channels
 - **Google Drive**: Document management
 - **Puppeteer**: Web automation and scraping
