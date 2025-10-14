@@ -13,6 +13,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# FIX 1: Import the health router
+from .routes import health as health_router
+# FIX 2: Import the MongoDB initialization function
+from ..storage.mongodb_client import initialize_mongodb, mongodb_client
+
+
 # Load environment variables
 load_dotenv()
 
@@ -43,12 +49,14 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting AI Agent Boilerplate API...")
     
-    # Initialize services here if needed
+    # FIX 2: Initialize the database connection on startup
+    await initialize_mongodb(uri=os.getenv("MONGODB_URI"), database=os.getenv("MONGODB_DB_NAME"))
     
     yield
     
     # Shutdown
     print("👋 Shutting down AI Agent Boilerplate API...")
+    await mongodb_client.close()
 
 
 # Create FastAPI app
@@ -68,6 +76,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# FIX 1: Add the health check routes to the main application
+app.include_router(health_router.router, prefix="/health", tags=["Health"])
+
 
 @app.get("/", response_model=Dict[str, str])
 async def root():
@@ -82,26 +93,18 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint."""
-    # Check service status
+    # This endpoint is now technically overridden by the one in health.py,
+    # but we'll leave it here as a fallback. The /health/ready is the important one.
     services = {}
     
-    # MongoDB
     try:
-        from pymongo import MongoClient
-        client = MongoClient(os.getenv("MONGODB_URI"), serverSelectionTimeoutMS=1000)
-        client.admin.command('ping')
+        await mongodb_client.client.admin.command('ping')
         services["mongodb"] = "healthy"
-        client.close()
     except Exception:
         services["mongodb"] = "unhealthy"
     
-    # Voyage AI
     services["voyage_ai"] = "configured" if os.getenv("VOYAGE_API_KEY") else "not_configured"
-    
-    # OpenAI
     services["openai"] = "configured" if os.getenv("OPENAI_API_KEY") else "not_configured"
-    
-    # Galileo
     services["galileo"] = "configured" if os.getenv("GALILEO_API_KEY") else "not_configured"
     
     return HealthResponse(
@@ -115,8 +118,6 @@ async def health_check():
 async def chat(request: ChatRequest):
     """Chat with the AI agent."""
     try:
-        # For now, return a simple echo response
-        # In production, this would call the actual agent
         response = f"Echo: {request.message}"
         
         return ChatResponse(

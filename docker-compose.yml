@@ -14,7 +14,8 @@ services:
       MONGO_INITDB_DATABASE: ai_agent_boilerplate
     volumes:
       - mongodb_data:/data/db
-      - ./infrastructure/mongodb/init.js:/docker-entrypoint-initdb.d/init.js:ro
+      #- ./infrastructure/mongodb/init.js:/docker-entrypoint-initdb.d/init.js:ro
+      - ./infrastructure/mongodb/initdb:/docker-entrypoint-initdb.d:ro
     networks:
       - agent-network
     healthcheck:
