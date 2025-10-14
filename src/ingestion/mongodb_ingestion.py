@@ -427,4 +427,4 @@ if __name__ == "__main__":
         for doc in results:
             print(f"Score: {doc['score']:.4f} - Text: {doc['text'][:100]}...")
     
-    asyncio.run(main()
+    asyncio.run(main())
