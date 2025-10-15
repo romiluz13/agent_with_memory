@@ -34,7 +34,7 @@ async def main():
     
     # Initialize MongoDB
     mongo_client = MongoDBClient()
-    await mongo_client.connect()
+    # await mongo_client.connect()
     
     # Configure memory
     memory_config = MemoryConfig(
