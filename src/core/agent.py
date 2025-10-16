@@ -2,6 +2,13 @@
 Base Agent Class with LangGraph Orchestration
 Core agent implementation with memory integration
 """
+import os
+import sys
+
+project_root = os.path.dirname(os.path.abspath(__file__))
+# Note: The original sys.path manipulation is generally not best practice,
+# but we will leave it in case other scripts rely on it. A better solution
+# would be to install the project in editable mode (pip install -e .).
 
 import logging
 from typing import TypedDict, List, Dict, Any, Optional, Literal
@@ -9,7 +16,6 @@ from datetime import datetime
 from dataclasses import dataclass
 
 from langgraph.graph import StateGraph, END
-# from langgraph.checkpoint.base import BaseCheckpointer  # Import issue - will be fixed
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import BaseTool
@@ -18,6 +24,9 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+# === THIS IS THE FIX ===
+# The incorrect circular and absolute imports have been removed.
+# We now use correct relative imports for sibling modules.
 from ..memory.manager import MemoryManager, MemoryConfig
 from ..memory.base import MemoryType
 from ..tools.mcp_toolkit import MCPToolkit
@@ -103,49 +112,44 @@ class BaseAgent:
         logger.info(f"Initialized agent: {self.agent_id} with {len(self.tools)} tools")
     
     def _initialize_mcp_tools(self):
-        """Initialize MCP tools asynchronously."""
+        """Initialize MCP tools asynchronously with timeout safety."""
         import asyncio
-        
+
+        if not self.config.enable_mcp or not self.config.mcp_servers:
+            logger.info("MCP disabled or no servers provided — skipping MCP load.")
+            return
+
         try:
-            logger.info(f"Loading MCP tools from {len(self.config.mcp_servers)} servers")
+            logger.info(f"🧩 Loading MCP tools from {len(self.config.mcp_servers)} servers (timeout=10s)")
             self.mcp_toolkit = MCPToolkit(self.config.mcp_servers)
-            
-            # Run async load in sync context
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            try:
-                mcp_tools = loop.run_until_complete(self.mcp_toolkit.load_tools())
-                if mcp_tools:
-                    self.tools.extend(mcp_tools)
-                    logger.info(f"Successfully loaded {len(mcp_tools)} MCP tools")
-                else:
-                    logger.warning("No MCP tools were loaded")
-            finally:
-                loop.close()
-                
-        except Exception as e:
-            logger.error(f"Failed to initialize MCP tools: {e}")
-            # Don't crash - graceful degradation
-            self.mcp_toolkit = None
-    
-    async def _initialize_mcp_tools_async(self):
-        """Async version for MCP tools initialization."""
-        if not self.config.enable_mcp or not self.config.mcp_servers:
-            return
-            
-        try:
-            if not self.mcp_toolkit:
-                self.mcp_toolkit = MCPToolkit(self.config.mcp_servers)
-            
-            mcp_tools = await self.mcp_toolkit.load_tools()
+
+            async def safe_load():
+                try:
+                    return await asyncio.wait_for(self.mcp_toolkit.load_tools(), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.warning("⏰ MCP tool loading timed out — continuing without MCP tools.")
+                    return []
+
+            mcp_tools = loop.run_until_complete(safe_load())
+
             if mcp_tools:
                 self.tools.extend(mcp_tools)
-                # Recreate tool executor with new tools
-                self.tool_node = ToolNode(self.tools) if self.tools else None
-                logger.info(f"Async loaded {len(mcp_tools)} MCP tools")
-                
+                logger.info(f"✅ Loaded {len(mcp_tools)} MCP tools")
+            else:
+                logger.info("⚠️ No MCP tools loaded (skipped or timed out)")
+
         except Exception as e:
-            logger.error(f"Failed to async initialize MCP tools: {e}")
+            logger.error(f"Failed to initialize MCP tools: {e}")
+            self.mcp_toolkit = None
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
     
     def _create_llm(self) -> BaseChatModel:
         """Create the language model based on configuration."""

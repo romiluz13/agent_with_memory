@@ -24,7 +24,6 @@ from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_mongodb.retrievers.full_text_search import MongoDBAtlasFullTextSearchRetriever
 from langchain_voyageai import VoyageAIEmbeddings
 from pymongo import MongoClient
-# <<< FIX: Import OperationFailure to catch the specific MongoDB error that occurs on M0 clusters >>>
 from pymongo.errors import OperationFailure
 
 logger = logging.getLogger(__name__)
@@ -70,13 +69,9 @@ class MongoDBLangGraphAgent:
         self.embedding_dimensions = 1024
         self.llm = self._create_llm(model_provider, model_name)
         
-        # <<< FIX: The original file had 'MongoDBSaver(self.client)', which is incorrect. >>>
-        # The correct way to initialize is with from_conn_string, which also handles db selection.
-        self.checkpointer = MongoDBSaver.from_conn_string(mongodb_uri, db_name=database_name)
-        
-        # This line was in your original code but is unused later.
-        # It's safe to keep, but the tools re-initialize the store themselves.
-        # self.memory_store = self._create_memory_store()
+        # === THIS IS THE FINAL FIX ===
+        # The checkpointer needs to be instantiated directly, not from a context manager.
+        self.checkpointer = MongoDBSaver(self.client[database_name])
         
         self.tools = self._create_tools(user_tools or [])
         self.graph = self._build_graph()
@@ -95,8 +90,7 @@ class MongoDBLangGraphAgent:
             raise ValueError(f"Unknown provider: {provider}")
     
     def _create_memory_store(self) -> MongoDBStore:
-        """Create MongoDB store for long-term memory (from notebook)."""
-        # This function is not actively used by the tools but is here for completeness.
+        """Create MongoDB store for long-term memory (this is the function that causes the timeout)."""
         index_config = create_vector_index_config(
             embed=self.embedding_model,
             dims=self.embedding_dimensions,
@@ -108,7 +102,7 @@ class MongoDBLangGraphAgent:
             db_name=self.database_name,
             collection_name="agent_memories",
             index_config=index_config,
-            auto_index_timeout=60
+            auto_index_timeout=5
         )
         return store
     
@@ -119,73 +113,50 @@ class MongoDBLangGraphAgent:
         
         @tool
         def save_memory(content: str) -> str:
-            """Save important information to memory for later retrieval."""
-            # <<< FIX: Wrap the entire operation in a try...except block to prevent crashes on M0 tier >>>
+            """Save important information to memory."""
             try:
-                with MongoDBStore.from_conn_string(
-                    conn_string=self.mongodb_uri,
-                    db_name=self.database_name,
-                    collection_name="agent_memories",
-                    index_config=create_vector_index_config(
-                        embed=self.embedding_model, dims=self.embedding_dimensions,
-                        relevance_score_fn="dotProduct", fields=["content"]
-                    ),
-                    auto_index_timeout=5 # Use a shorter timeout
-                ) as store:
+                with self._create_memory_store() as store:
                     store.put(
                         namespace=("agent", self.agent_name),
                         key=f"memory_{hash(content)}",
                         value={"content": content, "timestamp": datetime.utcnow().isoformat()}
                     )
-                return f"Memory saved successfully: '{content}'"
+                return f"Memory saved: {content}"
             except (TimeoutError, OperationFailure) as e:
-                logger.warning(f"Could not save to vector memory (likely using M0 Free Tier): {e}")
-                return "Note: Vector search is not available on this database tier. Memory was not saved for semantic search."
+                logger.warning(f"Could not save memory to vector store (likely on M0 tier): {e}")
+                return "Note: Vector-based memory is not available on this database tier. Memory was not saved for semantic recall."
 
         @tool
         def retrieve_memories(query: str) -> str:
-            """Retrieve relevant memories based on a query using semantic search."""
-            # <<< FIX: Wrap the entire operation in a try...except block to prevent crashes on M0 tier >>>
+            """Retrieve relevant memories based on a query."""
             try:
-                with MongoDBStore.from_conn_string(
-                    conn_string=self.mongodb_uri,
-                    db_name=self.database_name,
-                    collection_name="agent_memories",
-                     index_config=create_vector_index_config(
-                        embed=self.embedding_model, dims=self.embedding_dimensions,
-                        relevance_score_fn="dotProduct", fields=["content"]
-                    ),
-                    auto_index_timeout=5
-                ) as store:
+                with self._create_memory_store() as store:
                     results = store.search(("agent", self.agent_name), query=query, limit=3)
                     if results:
                         memories = [result.value["content"] for result in results]
-                        return f"Retrieved memories:\n" + "\n".join(f"- {mem}" for mem in memories)
+                        return f"Retrieved memories:\n" + "\n".join(memories)
                     else:
                         return "No relevant memories found."
             except (TimeoutError, OperationFailure) as e:
-                logger.warning(f"Vector search failed (likely using M0 Free Tier): {e}")
-                return "Vector search is not available on this database tier. Cannot retrieve memories."
+                logger.warning(f"Could not retrieve memories from vector store (likely on M0 tier): {e}")
+                return "Vector-based memory is not available on this database tier."
         
         @tool
         def vector_search(user_query: str) -> str:
-            """Retrieve information from ingested documents using vector search to answer a user query."""
-            # <<< FIX: Wrap the entire operation in a try...except block to prevent crashes on M0 tier >>>
+            """Retrieve information using vector search to answer a user query."""
             try:
                 vector_store = MongoDBAtlasVectorSearch.from_connection_string(
                     connection_string=self.mongodb_uri,
                     namespace=f"{self.database_name}.documents",
-                    embedding=self.embedding_model
+                    embedding=self.embedding_model,
                 )
-                retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+                retriever = vector_store.as_retriever(search_kwargs={"k": 5})
                 results = retriever.invoke(user_query)
-                if not results:
-                    return "No relevant documents found via vector search."
-                context = "\n\n".join([f"Source: {doc.metadata.get('source', 'N/A')}\nContent: {doc.page_content}" for doc in results])
-                return f"Found the following information:\n{context}"
+                context = "\n\n".join([f"{doc.metadata.get('title', 'Doc')}: {doc.page_content}" for doc in results])
+                return context
             except (TimeoutError, OperationFailure) as e:
-                logger.warning(f"Vector search failed (likely using M0 Free Tier): {e}")
-                return "Vector search is not available on this database tier. Cannot search documents."
+                logger.warning(f"Could not perform vector search (likely on M0 tier): {e}")
+                return "Vector search is not available on this database tier."
 
         built_in_tools.extend([save_memory, retrieve_memories, vector_search])
         
@@ -205,20 +176,25 @@ class MongoDBLangGraphAgent:
         tools_by_name = {tool.name: tool for tool in self.tools}
 
         def agent_node(state: GraphState) -> Dict[str, List]:
-            return {"messages": [llm_with_tools.invoke(state["messages"])]}
+            result = llm_with_tools.invoke(state["messages"])
+            return {"messages": [result]}
 
         def tool_node(state: GraphState) -> Dict[str, List]:
             result = []
-            for tool_call in state["messages"][-1].tool_calls:
+            tool_calls = state["messages"][-1].tool_calls
+            for tool_call in tool_calls:
                 tool_to_call = tools_by_name[tool_call["name"]]
                 observation = tool_to_call.invoke(tool_call["args"])
-                # <<< FIX: Ensure the observation content is always a string before creating a ToolMessage >>>
                 result.append(ToolMessage(content=str(observation), tool_call_id=tool_call["id"]))
             return {"messages": result}
 
         def router(state: GraphState):
-            last_message = state["messages"][-1]
-            if hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0:
+            messages = state.get("messages", [])
+            if len(messages) > 0:
+                ai_message = messages[-1]
+            else:
+                raise ValueError(f"No messages found in state: {state}")
+            if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
                 return "tools"
             return END
 
@@ -226,15 +202,15 @@ class MongoDBLangGraphAgent:
         graph.add_node("agent", agent_node)
         graph.add_node("tools", tool_node)
         graph.add_edge(START, "agent")
-        graph.add_conditional_edges("agent", router, {"tools": "tools", END: END})
         graph.add_edge("tools", "agent")
+        graph.add_conditional_edges("agent", router, {"tools": "tools", END: END})
         
         return graph.compile(checkpointer=self.checkpointer)
     
-    def execute(self, user_input: str, thread_id: Optional[str] = None) -> str:
+    def execute(self, message: str, thread_id: Optional[str] = None) -> str:
         """Execute the graph with user input."""
         config = {"configurable": {"thread_id": thread_id or "default_thread"}}
-        input_state = {"messages": [HumanMessage(content=user_input)]}
+        input_state = {"messages": [HumanMessage(content=message)]}
         
         final_message_content = "I couldn't generate a response."
         for output in self.graph.stream(input_state, config):
@@ -247,69 +223,48 @@ class MongoDBLangGraphAgent:
 
         return final_message_content
     
-    async def aexecute(self, user_input: str, thread_id: Optional[str] = None) -> str:
+    async def aexecute(self, message: str, thread_id: Optional[str] = None) -> str:
         """Async execute the graph with user input."""
         config = {"configurable": {"thread_id": thread_id or "default_thread"}}
-        input_state = {"messages": [HumanMessage(content=user_input)]}
+        input_state = {"messages": [HumanMessage(content=message)]}
         
         final_message_content = "I couldn't generate a response."
         async for output in self.graph.astream(input_state, config):
-             if output:
+            if output:
                 last_node_key = list(output.keys())[-1]
                 if "messages" in output[last_node_key]:
                     final_message = output[last_node_key]['messages'][-1]
                     if hasattr(final_message, "content"):
                         final_message_content = final_message.content
-                    
+        
         return final_message_content
     
-    # The rest of your original file remains unchanged...
     def create_vector_indexes(self):
-        """
-        Create vector search indexes for collections.
-        """
-        import time
-        
-        collections_to_index = [
-            "documents", 
-            "agent_memories"
-        ]
+        """Create vector search indexes for collections."""
+        collections_to_index = ["documents", "agent_memories"]
         
         for collection_name in collections_to_index:
             collection = self.db[collection_name]
-            
             index_definition = {
-                "name": "vector_index",
-                "type": "vectorSearch",
+                "name": "vector_index", "type": "vectorSearch",
                 "definition": {
                     "fields": [
-                        {
-                            "type": "vector",
-                            "path": "vector_embeddings", 
-                            "similarity": "cosine",
-                            "numDimensions": self.embedding_dimensions
-                        }
+                        {"type": "vector", "path": "vector_embeddings", "similarity": "cosine", "numDimensions": self.embedding_dimensions}
                     ]
                 }
             }
-            
             try:
                 existing_indexes = list(collection.list_search_indexes())
-                index_exists = any(idx.get("name") == "vector_index" for idx in existing_indexes)
-                
-                if not index_exists:
+                if not any(idx.get("name") == "vector_index" for idx in existing_indexes):
                     logger.info(f"Creating vector index for {collection_name}...")
                     collection.create_search_index(index_definition)
                 else:
                     logger.info(f"✅ Vector index already exists for {collection_name}")
-                    
             except OperationFailure as e:
-                # This will catch the error on M0 Free Tiers
                 logger.warning(f"⚠️ Could not create vector index for {collection_name} (this is expected on M0 clusters): {e}")
             except Exception as e:
-                logger.error(f"An unexpected error occurred during index creation for {collection_name}: {e}")
+                logger.warning(f"⚠️ An unexpected error occurred during index creation for {collection_name}: {e}")
 
-# Example usage from your original file
 if __name__ == "__main__":
     import asyncio
     from dotenv import load_dotenv
@@ -325,8 +280,11 @@ if __name__ == "__main__":
     
     agent.create_vector_indexes()
     
-    response = agent.execute(
-        "What are some movies that take place in the ocean?",
-        thread_id="test_session"
-    )
+    response = agent.execute("What are some movies that take place in the ocean?", thread_id="test_session")
+    print(f"Response: {response}")
+    
+    response = agent.execute("Remember that I prefer funny movies.", thread_id="test_session")
+    print(f"Response: {response}")
+    
+    response = agent.execute("What do you know about me?", thread_id="test_session")
     print(f"Response: {response}")
