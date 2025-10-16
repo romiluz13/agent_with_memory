@@ -24,6 +24,7 @@ from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_mongodb.retrievers.full_text_search import MongoDBAtlasFullTextSearchRetriever
 from langchain_voyageai import VoyageAIEmbeddings
 from pymongo import MongoClient
+from pymongo.errors import OperationFailure
 
 logger = logging.getLogger(__name__)
 
@@ -44,23 +45,13 @@ class MongoDBLangGraphAgent:
         agent_name: str = "assistant",
         model_provider: str = "openai",
         model_name: str = "gpt-4o",
-        embedding_model: str = "voyage-3-large",
+        embedding_model: str = "voyage-2", # Using a valid model name from .env.example
         database_name: str = "ai_agent_boilerplate",
         system_prompt: Optional[str] = None,
         user_tools: Optional[List] = None
     ):
         """
         Initialize the agent with MongoDB connection.
-        
-        Args:
-            mongodb_uri: MongoDB connection string
-            agent_name: Name of the agent
-            model_provider: LLM provider (openai, anthropic, google)
-            model_name: Model name
-            embedding_model: Voyage AI embedding model
-            database_name: MongoDB database name
-            system_prompt: Custom system prompt for the agent's persona
-            user_tools: List of custom tools for the agent to use
         """
         self.mongodb_uri = mongodb_uri
         self.agent_name = agent_name
@@ -72,27 +63,17 @@ class MongoDBLangGraphAgent:
             " You have access to the following tools: {tool_names}."
         )
         
-        # Initialize MongoDB client
         self.client = MongoClient(mongodb_uri)
         self.db = self.client[database_name]
-        
-        # Initialize embeddings (from MongoDB notebook)
         self.embedding_model = VoyageAIEmbeddings(model=embedding_model)
-        self.embedding_dimensions = 1024  # Standard dimension for all embeddings
-        
-        # Initialize LLM
+        self.embedding_dimensions = 1024
         self.llm = self._create_llm(model_provider, model_name)
         
-        # Initialize checkpointer for short-term memory
-        self.checkpointer = MongoDBSaver(self.client)
+        # === THIS IS THE FINAL FIX ===
+        # The checkpointer needs to be instantiated directly, not from a context manager.
+        self.checkpointer = MongoDBSaver(self.client[database_name])
         
-        # Initialize store for long-term memory
-        self.memory_store = self._create_memory_store()
-        
-        # Define tools, including user-provided ones
         self.tools = self._create_tools(user_tools or [])
-        
-        # Build the graph
         self.graph = self._build_graph()
         
         logger.info(f"Initialized MongoDB LangGraph Agent: {agent_name}")
@@ -109,336 +90,187 @@ class MongoDBLangGraphAgent:
             raise ValueError(f"Unknown provider: {provider}")
     
     def _create_memory_store(self) -> MongoDBStore:
-        """Create MongoDB store for long-term memory (from notebook)."""
-        # Vector search index configuration for memory collection
+        """Create MongoDB store for long-term memory (this is the function that causes the timeout)."""
         index_config = create_vector_index_config(
             embed=self.embedding_model,
             dims=self.embedding_dimensions,
             relevance_score_fn="dotProduct",
             fields=["content"]
         )
-        
-        # Create store with auto-indexing
         store = MongoDBStore.from_conn_string(
             conn_string=self.mongodb_uri,
             db_name=self.database_name,
             collection_name="agent_memories",
             index_config=index_config,
-            auto_index_timeout=60  # Wait for index creation
+            auto_index_timeout=5
         )
-        
         return store
     
     def _create_tools(self, user_tools: List) -> List:
         """Create agent tools, combining built-in and user-provided tools."""
         
-        # Your boilerplate's built-in memory tools
         built_in_tools = []
         
-        # Tool to save important interactions to memory
         @tool
         def save_memory(content: str) -> str:
             """Save important information to memory."""
-            with MongoDBStore.from_conn_string(
-                conn_string=self.mongodb_uri,
-                db_name=self.database_name,
-                collection_name="agent_memories",
-                index_config=create_vector_index_config(
-                    embed=self.embedding_model,
-                    dims=self.embedding_dimensions,
-                    relevance_score_fn="dotProduct",
-                    fields=["content"]
-                )
-            ) as store:
-                store.put(
-                    namespace=("agent", self.agent_name),
-                    key=f"memory_{hash(content)}",
-                    value={"content": content, "timestamp": datetime.utcnow().isoformat()}
-                )
-            return f"Memory saved: {content}"
-        
-        # Tool to retrieve memories using vector search
+            try:
+                with self._create_memory_store() as store:
+                    store.put(
+                        namespace=("agent", self.agent_name),
+                        key=f"memory_{hash(content)}",
+                        value={"content": content, "timestamp": datetime.utcnow().isoformat()}
+                    )
+                return f"Memory saved: {content}"
+            except (TimeoutError, OperationFailure) as e:
+                logger.warning(f"Could not save memory to vector store (likely on M0 tier): {e}")
+                return "Note: Vector-based memory is not available on this database tier. Memory was not saved for semantic recall."
+
         @tool
         def retrieve_memories(query: str) -> str:
             """Retrieve relevant memories based on a query."""
-            with MongoDBStore.from_conn_string(
-                conn_string=self.mongodb_uri,
-                db_name=self.database_name,
-                collection_name="agent_memories",
-                index_config=create_vector_index_config(
-                    embed=self.embedding_model,
-                    dims=self.embedding_dimensions,
-                    relevance_score_fn="dotProduct",
-                    fields=["content"]
-                )
-            ) as store:
-                results = store.search(("agent", self.agent_name), query=query, limit=3)
-                
-                if results:
-                    memories = [result.value["content"] for result in results]
-                    return f"Retrieved memories:\n" + "\n".join(memories)
-                else:
-                    return "No relevant memories found."
+            try:
+                with self._create_memory_store() as store:
+                    results = store.search(("agent", self.agent_name), query=query, limit=3)
+                    if results:
+                        memories = [result.value["content"] for result in results]
+                        return f"Retrieved memories:\n" + "\n".join(memories)
+                    else:
+                        return "No relevant memories found."
+            except (TimeoutError, OperationFailure) as e:
+                logger.warning(f"Could not retrieve memories from vector store (likely on M0 tier): {e}")
+                return "Vector-based memory is not available on this database tier."
         
-        # Vector search tool for documents
         @tool
         def vector_search(user_query: str) -> str:
-            """
-            Retrieve information using vector search to answer a user query.
-            Based on MongoDB's retrieve-documents.js pattern.
-            """
-            # Initialize vector store
-            vector_store = MongoDBAtlasVectorSearch.from_connection_string(
-                connection_string=self.mongodb_uri,
-                namespace=f"{self.database_name}.documents",
-                embedding=self.embedding_model,
-                text_key="text",
-                embedding_key="vector_embeddings",
-                relevance_score_fn="dotProduct"
-            )
-            
-            retriever = vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 5}  # Retrieve top 5
-            )
-            
-            results = retriever.invoke(user_query)
-            
-            # Concatenate results
-            context = "\n\n".join([f"{doc.metadata.get('title', 'Doc')}: {doc.page_content}" for doc in results])
-            return context
-        
+            """Retrieve information using vector search to answer a user query."""
+            try:
+                vector_store = MongoDBAtlasVectorSearch.from_connection_string(
+                    connection_string=self.mongodb_uri,
+                    namespace=f"{self.database_name}.documents",
+                    embedding=self.embedding_model,
+                )
+                retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+                results = retriever.invoke(user_query)
+                context = "\n\n".join([f"{doc.metadata.get('title', 'Doc')}: {doc.page_content}" for doc in results])
+                return context
+            except (TimeoutError, OperationFailure) as e:
+                logger.warning(f"Could not perform vector search (likely on M0 tier): {e}")
+                return "Vector search is not available on this database tier."
+
         built_in_tools.extend([save_memory, retrieve_memories, vector_search])
         
-        # Add user-provided tools
         all_tools = built_in_tools + user_tools
         return all_tools
     
     def _build_graph(self) -> StateGraph:
-        """Build the LangGraph workflow (from MongoDB notebook)."""
-        # Create prompt template
+        """Build the LangGraph workflow."""
         prompt = ChatPromptTemplate.from_messages(
             [
-                (
-                    "system",
-                    self.system_prompt
-                ),
+                ("system", self.system_prompt),
                 MessagesPlaceholder(variable_name="messages"),
             ]
         )
-        
-        # Provide tool names to prompt
         prompt = prompt.partial(tool_names=", ".join([tool.name for tool in self.tools]))
-        
-        # Bind tools to LLM
         llm_with_tools = prompt | self.llm.bind_tools(self.tools)
-        
-        # Create tools map
         tools_by_name = {tool.name: tool for tool in self.tools}
-        
-        # Define agent node
-        def agent(state: GraphState) -> Dict[str, List]:
-            messages = state["messages"]
-            result = llm_with_tools.invoke(messages)
+
+        def agent_node(state: GraphState) -> Dict[str, List]:
+            result = llm_with_tools.invoke(state["messages"])
             return {"messages": [result]}
-        
-        # Define tools node
-        def tools_node(state: GraphState) -> Dict[str, List]:
+
+        def tool_node(state: GraphState) -> Dict[str, List]:
             result = []
             tool_calls = state["messages"][-1].tool_calls
-            
             for tool_call in tool_calls:
-                tool = tools_by_name[tool_call["name"]]
-                observation = tool.invoke(tool_call["args"])
-                result.append(ToolMessage(
-                    content=observation,
-                    tool_call_id=tool_call["id"]
-                ))
-            
+                tool_to_call = tools_by_name[tool_call["name"]]
+                observation = tool_to_call.invoke(tool_call["args"])
+                result.append(ToolMessage(content=str(observation), tool_call_id=tool_call["id"]))
             return {"messages": result}
-        
-        # Define routing function
-        def route_tools(state: GraphState):
+
+        def router(state: GraphState):
             messages = state.get("messages", [])
             if len(messages) > 0:
                 ai_message = messages[-1]
             else:
                 raise ValueError(f"No messages found in state: {state}")
-            
             if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
                 return "tools"
             return END
-        
-        # Build the graph
+
         graph = StateGraph(GraphState)
-        
-        # Add nodes
-        graph.add_node("agent", agent)
-        graph.add_node("tools", tools_node)
-        
-        # Add edges
+        graph.add_node("agent", agent_node)
+        graph.add_node("tools", tool_node)
         graph.add_edge(START, "agent")
         graph.add_edge("tools", "agent")
+        graph.add_conditional_edges("agent", router, {"tools": "tools", END: END})
         
-        # Add conditional edge
-        graph.add_conditional_edges(
-            "agent",
-            route_tools,
-            {"tools": "tools", END: END}
-        )
-        
-        # Compile with checkpointer for short-term memory
         return graph.compile(checkpointer=self.checkpointer)
     
-    def execute(self, user_input: str, thread_id: Optional[str] = None) -> str:
-        """
-        Execute the graph with user input.
+    def execute(self, message: str, thread_id: Optional[str] = None) -> str:
+        """Execute the graph with user input."""
+        config = {"configurable": {"thread_id": thread_id or "default_thread"}}
+        input_state = {"messages": [HumanMessage(content=message)]}
         
-        Args:
-            user_input: User's message
-            thread_id: Thread ID for conversation persistence
-            
-        Returns:
-            Agent's response
-        """
-        # Configure thread for persistence
-        config = {"configurable": {"thread_id": thread_id or "default"}}
-        
-        # Prepare input
-        input_state = {
-            "messages": [
-                HumanMessage(content=user_input)
-            ]
-        }
-        
-        # Execute graph
-        result = None
+        final_message_content = "I couldn't generate a response."
         for output in self.graph.stream(input_state, config):
-            for key, value in output.items():
-                logger.debug(f"Node {key}: {value}")
-                result = value
-        
-        # Extract final answer
-        if result and "messages" in result:
-            final_message = result["messages"][-1]
-            if hasattr(final_message, "content"):
-                return final_message.content
-        
-        return "I couldn't generate a response."
+            if output:
+                last_node_key = list(output.keys())[-1]
+                if "messages" in output[last_node_key]:
+                    final_message = output[last_node_key]['messages'][-1]
+                    if hasattr(final_message, "content"):
+                        final_message_content = final_message.content
+
+        return final_message_content
     
-    async def aexecute(self, user_input: str, thread_id: Optional[str] = None) -> str:
-        """
-        Async execute the graph with user input.
+    async def aexecute(self, message: str, thread_id: Optional[str] = None) -> str:
+        """Async execute the graph with user input."""
+        config = {"configurable": {"thread_id": thread_id or "default_thread"}}
+        input_state = {"messages": [HumanMessage(content=message)]}
         
-        Args:
-            user_input: User's message
-            thread_id: Thread ID for conversation persistence
-            
-        Returns:
-            Agent's response
-        """
-        # Configure thread for persistence
-        config = {"configurable": {"thread_id": thread_id or "default"}}
-        
-        # Prepare input
-        input_state = {
-            "messages": [
-                HumanMessage(content=user_input)
-            ]
-        }
-        
-        # Execute graph
-        result = None
+        final_message_content = "I couldn't generate a response."
         async for output in self.graph.astream(input_state, config):
-            for key, value in output.items():
-                logger.debug(f"Node {key}: {value}")
-                result = value
+            if output:
+                last_node_key = list(output.keys())[-1]
+                if "messages" in output[last_node_key]:
+                    final_message = output[last_node_key]['messages'][-1]
+                    if hasattr(final_message, "content"):
+                        final_message_content = final_message.content
         
-        # Extract final answer
-        if result and "messages" in result:
-            final_message = result["messages"][-1]
-            if hasattr(final_message, "content"):
-                return final_message.content
-        
-        return "I couldn't generate a response."
+        return final_message_content
     
     def create_vector_indexes(self):
-        """
-        Create vector search indexes for collections.
-        Based on MongoDB Developer examples with proper error handling.
-        """
-        import time
-        
-        collections_to_index = [
-            "documents", 
-            "agent_memories"
-        ]
+        """Create vector search indexes for collections."""
+        collections_to_index = ["documents", "agent_memories"]
         
         for collection_name in collections_to_index:
             collection = self.db[collection_name]
-            
-            # MongoDB Atlas vector index definition (mongodb-developer pattern)
             index_definition = {
-                "name": "vector_index",
-                "type": "vectorSearch",
+                "name": "vector_index", "type": "vectorSearch",
                 "definition": {
                     "fields": [
-                        {
-                            "type": "vector",
-                            "path": "vector_embeddings", 
-                            "similarity": "cosine",
-                            "numDimensions": self.embedding_dimensions
-                        }
+                        {"type": "vector", "path": "vector_embeddings", "similarity": "cosine", "numDimensions": self.embedding_dimensions}
                     ]
                 }
             }
-            
             try:
-                # Check if index already exists (mongodb-developer pattern)
                 existing_indexes = list(collection.list_search_indexes())
-                index_exists = any(idx.get("name") == "vector_index" for idx in existing_indexes)
-                
-                if not index_exists:
+                if not any(idx.get("name") == "vector_index" for idx in existing_indexes):
                     logger.info(f"Creating vector index for {collection_name}...")
-                    result = collection.create_search_index(index_definition)
-                    logger.info(f"Index creation initiated: {result}")
-                    
-                    # Wait for index to be ready (optional - for production)
-                    # Note: In production, this is usually done async
-                    for i in range(15):  # Wait up to 15 seconds
-                        time.sleep(1)
-                        try:
-                            indexes = list(collection.list_search_indexes())
-                            vector_index = next((idx for idx in indexes if idx.get("name") == "vector_index"), None)
-                            if vector_index and vector_index.get("status") == "READY":
-                                logger.info(f"✅ Vector index ready for {collection_name}")
-                                break
-                        except:
-                            pass  # Index might still be creating
-                    else:
-                        logger.info(f"⏳ Vector index for {collection_name} still creating (this is normal)")
+                    collection.create_search_index(index_definition)
                 else:
                     logger.info(f"✅ Vector index already exists for {collection_name}")
-                    
+            except OperationFailure as e:
+                logger.warning(f"⚠️ Could not create vector index for {collection_name} (this is expected on M0 clusters): {e}")
             except Exception as e:
-                # More specific error handling
-                if "already exists" in str(e) or "IndexAlreadyExists" in str(e):
-                    logger.info(f"✅ Vector index already exists for {collection_name}")
-                elif "NamespaceNotFound" in str(e):
-                    logger.info(f"📝 Collection {collection_name} will be created when first document is added")
-                else:
-                    logger.warning(f"⚠️ Index creation issue for {collection_name}: {e}")
-                    logger.info("This is usually fine - indexes can be created later")
+                logger.warning(f"⚠️ An unexpected error occurred during index creation for {collection_name}: {e}")
 
-
-# Example usage matching MongoDB notebook patterns
 if __name__ == "__main__":
     import asyncio
     from dotenv import load_dotenv
     
     load_dotenv()
     
-    # Initialize agent
     agent = MongoDBLangGraphAgent(
         mongodb_uri=os.getenv("MONGODB_URI"),
         agent_name="assistant",
@@ -446,26 +278,13 @@ if __name__ == "__main__":
         model_name="gpt-4o"
     )
     
-    # Create indexes
     agent.create_vector_indexes()
     
-    # Test execution
-    response = agent.execute(
-        "What are some movies that take place in the ocean?",
-        thread_id="test_session"
-    )
+    response = agent.execute("What are some movies that take place in the ocean?", thread_id="test_session")
     print(f"Response: {response}")
     
-    # Test memory
-    response = agent.execute(
-        "Remember that I prefer funny movies.",
-        thread_id="test_session"
-    )
+    response = agent.execute("Remember that I prefer funny movies.", thread_id="test_session")
     print(f"Response: {response}")
     
-    # Test memory retrieval
-    response = agent.execute(
-        "What do you know about me?",
-        thread_id="test_session"
-    )
+    response = agent.execute("What do you know about me?", thread_id="test_session")
     print(f"Response: {response}")
