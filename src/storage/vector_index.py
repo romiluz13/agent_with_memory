@@ -25,8 +25,8 @@ class VectorIndexManager:
     async def create_index(
         self,
         index_name: str = "vector_index",
-        embedding_field: str = "vector_embeddings",
-        dimensions: int = 1024,  # voyage-2 dimensions
+        embedding_field: str = "embedding",  # Field used by AWM memory stores
+        dimensions: int = 1024,  # Voyage AI dimensions
         similarity: str = "cosine"
     ) -> Dict[str, Any]:
         """
@@ -51,6 +51,18 @@ class VectorIndexManager:
                         "path": embedding_field,
                         "similarity": similarity,
                         "numDimensions": dimensions
+                    },
+                    {
+                        "type": "filter",
+                        "path": "agent_id"
+                    },
+                    {
+                        "type": "filter",
+                        "path": "user_id"
+                    },
+                    {
+                        "type": "filter",
+                        "path": "memory_type"
                     }
                 ]
             }
@@ -86,9 +98,93 @@ class VectorIndexManager:
 async def create_vector_index(collection: AsyncIOMotorCollection):
     """
     Create vector search index (backward compatible function).
-    
+
     Args:
         collection: MongoDB collection
     """
     manager = VectorIndexManager(collection)
     return await manager.create_index()
+
+
+# All memory collections that need vector indexes
+MEMORY_COLLECTIONS = [
+    "episodic_memories",
+    "semantic_memories",
+    "procedural_memories",
+    "working_memories",
+    "cache_memories",
+    "entity_memories",
+    "summary_memories"
+]
+
+
+async def ensure_all_vector_indexes(db) -> Dict[str, Any]:
+    """
+    Create vector search indexes for all memory collections.
+
+    Args:
+        db: MongoDB database instance (AsyncIOMotorDatabase)
+
+    Returns:
+        Dict mapping collection names to creation results
+    """
+    results = {}
+
+    for collection_name in MEMORY_COLLECTIONS:
+        collection = db[collection_name]
+        manager = VectorIndexManager(collection)
+        result = await manager.create_index()
+        results[collection_name] = result
+        logger.info(f"{collection_name}: {result['status']}")
+
+    return results
+
+
+async def wait_for_indexes_ready(db, timeout_seconds: int = 120) -> bool:
+    """
+    Wait for all vector indexes to become queryable.
+
+    Note: Atlas vector indexes can take 1-5 minutes to build initially.
+
+    Args:
+        db: MongoDB database instance
+        timeout_seconds: Maximum time to wait
+
+    Returns:
+        True if all indexes are ready
+    """
+    import asyncio
+
+    waited = 0
+    interval = 10
+
+    while waited < timeout_seconds:
+        all_ready = True
+
+        for collection_name in MEMORY_COLLECTIONS:
+            collection = db[collection_name]
+            ready = False
+
+            async for index in collection.list_search_indexes():
+                if index.get("name") == "vector_index":
+                    status = index.get("status", "UNKNOWN")
+                    if status == "READY":
+                        ready = True
+                    else:
+                        logger.info(f"{collection_name} index status: {status}")
+                        all_ready = False
+                    break
+
+            if not ready:
+                all_ready = False
+
+        if all_ready:
+            logger.info("All vector indexes are READY")
+            return True
+
+        await asyncio.sleep(interval)
+        waited += interval
+        logger.info(f"Waiting for indexes... ({waited}s / {timeout_seconds}s)")
+
+    logger.warning("Timeout waiting for indexes to be ready")
+    return False

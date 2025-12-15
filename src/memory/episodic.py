@@ -33,15 +33,21 @@ class EpisodicMemory(MemoryStore):
         try:
             # Ensure it's episodic type
             memory.memory_type = MemoryType.EPISODIC
-            
+
             # Add temporal metadata
             memory.metadata["timestamp"] = datetime.utcnow().isoformat()
             memory.metadata["day_of_week"] = datetime.utcnow().strftime("%A")
-            
+
+            # Generate embedding for vector search
+            embedding_result = await self.embedding_service.generate_embedding(
+                memory.content, input_type="document"
+            )
+
             # Convert to dict for MongoDB
             memory_dict = memory.model_dump(exclude={"id"})
             memory_dict["_id"] = ObjectId()
-            
+            memory_dict["embedding"] = embedding_result.embedding  # Add embedding for vector search
+
             # Insert into collection
             result = await self.collection.insert_one(memory_dict)
             
@@ -56,20 +62,41 @@ class EpisodicMemory(MemoryStore):
         self,
         query: str,
         limit: int = 10,
-        threshold: float = 0.7
+        threshold: float = 0.7,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> List[Memory]:
-        """Retrieve episodic memories by similarity."""
+        """
+        Retrieve episodic memories by similarity.
+
+        Args:
+            query: Search query text
+            limit: Maximum memories to return
+            threshold: Minimum similarity threshold
+            agent_id: Filter by agent (CRITICAL for multi-tenant isolation)
+            user_id: Filter by user (for user isolation)
+
+        Returns:
+            List of relevant memories
+        """
         try:
             # Generate query embedding
             embedding_result = await self.embedding_service.generate_embedding(
                 query, input_type="query"
             )
-            
-            # Search for similar memories
+
+            # Build filter for multi-tenant isolation
+            filter_query = {}
+            if agent_id:
+                filter_query["agent_id"] = agent_id
+            if user_id:
+                filter_query["user_id"] = user_id
+
+            # Search for similar memories with isolation filters
             results = await self.search_engine.search(
-                query_embedding=embedding_result["embedding"],
+                query_embedding=embedding_result.embedding,
                 limit=limit,
-                filter_query={"memory_type": "episodic"}
+                filter_query=filter_query if filter_query else None
             )
             
             # Convert results to Memory objects
@@ -124,38 +151,136 @@ class EpisodicMemory(MemoryStore):
             logger.error(f"Failed to delete episodic memory {memory_id}: {e}")
             return False
     
-    async def list_memories(
-        self,
-        filters: Optional[Dict[str, Any]] = None,
-        limit: int = 100,
-        offset: int = 0
-    ) -> List[Memory]:
-        """List episodic memories with filters."""
-        try:
-            query = filters or {}
-            query["memory_type"] = "episodic"
-            
-            cursor = self.collection.find(query).skip(offset).limit(limit)
-            cursor = cursor.sort("created_at", -1)  # Most recent first
-            
-            memories = []
-            async for doc in cursor:
-                doc["id"] = str(doc.pop("_id"))
-                memories.append(Memory(**doc))
-            
-            return memories
-        except Exception as e:
-            logger.error(f"Failed to list episodic memories: {e}")
-            return []
-    
     async def clear_all(self, confirm: bool = False) -> int:
         """Clear all episodic memories."""
         if not confirm:
             raise ValueError("Must confirm deletion")
-        
+
         try:
             result = await self.collection.delete_many({"memory_type": "episodic"})
             return result.deleted_count
         except Exception as e:
             logger.error(f"Failed to clear episodic memories: {e}")
             return 0
+
+    async def mark_as_summarized(
+        self,
+        agent_id: str,
+        thread_id: str,
+        summary_id: str
+    ) -> int:
+        """
+        Mark messages as summarized without deleting them.
+        This preserves the full audit trail while excluding them from normal retrieval.
+
+        Based on Oracle's mark-instead-of-delete pattern.
+
+        Args:
+            agent_id: Agent ID
+            thread_id: Thread/conversation ID
+            summary_id: ID of the summary that replaced these messages
+
+        Returns:
+            Number of messages marked
+        """
+        try:
+            result = await self.collection.update_many(
+                {
+                    "memory_type": "episodic",
+                    "agent_id": agent_id,
+                    "metadata.thread_id": thread_id,
+                    "summary_id": None  # Only mark unsummarized messages
+                },
+                {
+                    "$set": {
+                        "summary_id": summary_id,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            logger.info(f"Marked {result.modified_count} messages as summarized (summary_id: {summary_id})")
+            return result.modified_count
+        except Exception as e:
+            logger.error(f"Failed to mark messages as summarized: {e}")
+            return 0
+
+    async def list_memories(
+        self,
+        filters: Optional[Dict[str, Any]] = None,
+        limit: int = 100,
+        offset: int = 0,
+        include_summarized: bool = False,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> List[Memory]:
+        """
+        List episodic memories with filters.
+
+        Args:
+            filters: MongoDB-style filters
+            limit: Maximum memories to return
+            offset: Pagination offset
+            include_summarized: If False, exclude summarized messages
+            agent_id: Filter by agent (for multi-tenant isolation)
+            user_id: Filter by user (for user isolation)
+
+        Returns:
+            List of memories
+        """
+        try:
+            query = filters or {}
+            query["memory_type"] = "episodic"
+
+            # Add isolation filters
+            if agent_id:
+                query["agent_id"] = agent_id
+            if user_id:
+                query["user_id"] = user_id
+
+            # Exclude summarized messages by default
+            if not include_summarized:
+                query["summary_id"] = None
+
+            cursor = self.collection.find(query).skip(offset).limit(limit)
+            cursor = cursor.sort("created_at", -1)  # Most recent first
+
+            memories = []
+            async for doc in cursor:
+                doc["id"] = str(doc.pop("_id"))
+                memories.append(Memory(**doc))
+
+            return memories
+        except Exception as e:
+            logger.error(f"Failed to list episodic memories: {e}")
+            return []
+
+    async def get_conversation_history(
+        self,
+        agent_id: str,
+        thread_id: str,
+        limit: int = 50,
+        include_summarized: bool = False
+    ) -> List[Memory]:
+        """
+        Get conversation history for a thread.
+
+        Args:
+            agent_id: Agent ID
+            thread_id: Thread/conversation ID
+            limit: Maximum messages to return
+            include_summarized: Include summarized messages
+
+        Returns:
+            List of conversation memories (chronological order)
+        """
+        filters = {
+            "agent_id": agent_id,
+            "metadata.thread_id": thread_id
+        }
+        memories = await self.list_memories(
+            filters=filters,
+            limit=limit,
+            include_summarized=include_summarized
+        )
+        # Return in chronological order
+        return sorted(memories, key=lambda m: m.created_at)

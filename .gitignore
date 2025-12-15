@@ -176,3 +176,7 @@ launch-website.sh
 *_notes.md
 todo.md
 TEMP_*.md
+
+# Claude Code development configuration (local rules only)
+.claude/rules/
+.claude/todos/

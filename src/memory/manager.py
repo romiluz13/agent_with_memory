@@ -14,6 +14,8 @@ from .procedural import ProceduralMemory
 from .semantic import SemanticMemory
 from .working import WorkingMemory
 from .cache import SemanticCache
+from .entity import EntityMemory
+from .summary import SummaryMemory
 from ..embeddings.voyage_client import get_embedding_service
 from ..retrieval.vector_search import MultiCollectionSearch
 
@@ -67,21 +69,27 @@ class MemoryManager:
         self.semantic = SemanticMemory(db["semantic_memories"])
         self.working = WorkingMemory(db["working_memories"])
         self.cache = SemanticCache(db["semantic_cache"])
-        
+        self.entity = EntityMemory(db["entity_memories"])
+        self.summary = SummaryMemory(db["summary_memories"])
+
         # Memory type mapping
         self.stores: Dict[MemoryType, MemoryStore] = {
             MemoryType.EPISODIC: self.episodic,
             MemoryType.PROCEDURAL: self.procedural,
             MemoryType.SEMANTIC: self.semantic,
             MemoryType.WORKING: self.working,
-            MemoryType.CACHE: self.cache
+            MemoryType.CACHE: self.cache,
+            MemoryType.ENTITY: self.entity,
+            MemoryType.SUMMARY: self.summary
         }
         
         # Multi-collection search
         self.multi_search = MultiCollectionSearch({
             "episodic": db["episodic_memories"],
             "procedural": db["procedural_memories"],
-            "semantic": db["semantic_memories"]
+            "semantic": db["semantic_memories"],
+            "entity": db["entity_memories"],
+            "summary": db["summary_memories"]
         })
         
         # Embedding service
@@ -443,5 +451,54 @@ class MemoryManager:
             stats["cache_performance"]["hit_rate"] = (
                 self.stats["cache_hits"] / total_cache_ops
             )
-        
+
         return stats
+
+    async def extract_entities(
+        self,
+        text: str,
+        agent_id: str,
+        llm,
+        user_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract and store entities from text using LLM.
+
+        Args:
+            text: Text to extract entities from
+            agent_id: Agent ID for memory ownership
+            llm: LLM instance for extraction
+            user_id: Optional user ID
+
+        Returns:
+            List of extracted entity dictionaries
+        """
+        return await self.entity.extract_and_store(
+            text=text,
+            llm=llm,
+            agent_id=agent_id,
+            user_id=user_id
+        )
+
+    async def get_summary_references(
+        self,
+        agent_id: str,
+        thread_id: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict[str, str]]:
+        """
+        Get summary references for context inclusion.
+
+        Args:
+            agent_id: Agent ID
+            thread_id: Optional thread filter
+            limit: Max references
+
+        Returns:
+            List of {summary_id, description} for context
+        """
+        return await self.summary.list_summary_references(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            limit=limit
+        )

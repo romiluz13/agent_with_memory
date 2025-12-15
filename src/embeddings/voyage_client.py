@@ -7,6 +7,7 @@ Maintains exact configuration for compatibility
 import os
 import logging
 import hashlib
+import asyncio
 from typing import List, Optional, Dict, Any, Literal
 from dataclasses import dataclass
 import voyageai
@@ -111,8 +112,9 @@ class VoyageEmbeddingService:
                 )
         
         try:
-            # Generate embedding
-            result = await self.client.embed(
+            # Generate embedding (voyage SDK is sync, wrap in thread)
+            result = await asyncio.to_thread(
+                self.client.embed,
                 texts=[text],
                 model=self.config.model,
                 input_type=input_type
@@ -181,7 +183,8 @@ class VoyageEmbeddingService:
             # Generate embeddings for uncached texts
             if uncached_texts:
                 try:
-                    batch_result = await self.client.embed(
+                    batch_result = await asyncio.to_thread(
+                        self.client.embed,
                         texts=uncached_texts,
                         model=self.config.model,
                         input_type=input_type

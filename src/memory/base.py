@@ -16,7 +16,9 @@ class MemoryType(str, Enum):
     PROCEDURAL = "procedural"  # Workflows and skills
     SEMANTIC = "semantic"      # Knowledge and facts
     WORKING = "working"        # Active session context
-    CACHE = "cache"           # Semantic cache for performance
+    CACHE = "cache"            # Semantic cache for performance
+    ENTITY = "entity"          # Extracted entities (people, places, systems)
+    SUMMARY = "summary"        # Compressed context summaries
 
 
 class MemoryImportance(str, Enum):
@@ -47,6 +49,7 @@ class Memory(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Tags for categorization")
     source: Optional[str] = Field(default=None, description="Source of the memory")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Confidence in memory")
+    summary_id: Optional[str] = Field(default=None, description="ID of summary if compressed")
 
 
 class MemoryStore(ABC):
