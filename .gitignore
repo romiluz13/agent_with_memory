@@ -180,3 +180,6 @@ TEMP_*.md
 # Claude Code development configuration (local rules only)
 .claude/rules/
 .claude/todos/
+
+# MongoDB GenAI-Showcase reference (cloned for hybrid search patterns)
+.genai-showcase/

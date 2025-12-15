@@ -1,7 +1,8 @@
 """
 MongoDB Vector Search Implementation
-Ported from MongoDB's retrieve-documents.js
-Maintains exact aggregation pipeline patterns
+Supports both pure vector search and hybrid search ($rankFusion).
+
+Based on MongoDB's official GenAI-Showcase patterns.
 """
 
 import logging
@@ -100,125 +101,131 @@ class VectorSearchEngine:
     
     async def hybrid_search(
         self,
+        query_text: str,
         query_embedding: List[float],
-        text_query: str,
         limit: int = 5,
-        vector_weight: float = 0.7,
-        text_weight: float = 0.3
+        vector_weight: float = 0.5,
+        text_weight: float = 0.5,
+        filter_query: Optional[Dict[str, Any]] = None,
+        num_candidates: int = 100,
+        index_name: str = "vector_index",
+        text_index_name: str = "text_search_index"
     ) -> List[SearchResult]:
         """
-        Perform hybrid search combining vector and text search.
-        
+        Perform hybrid search using MongoDB's $rankFusion operator.
+
+        Based on MongoDB's official GenAI-Showcase pattern.
+        Combines vector similarity search with full-text search for best results.
+
         Args:
-            query_embedding: Query vector
-            text_query: Text search query
-            limit: Number of results
+            query_text: Text search query
+            query_embedding: Query vector (1024 dimensions for Voyage AI)
+            limit: Number of results to return
             vector_weight: Weight for vector search (0-1)
             text_weight: Weight for text search (0-1)
-            
+            filter_query: Optional MongoDB filter query for multi-tenant isolation
+            num_candidates: Number of candidates to consider for vector search
+            index_name: Name of the vector search index
+            text_index_name: Name of the text search index
+
         Returns:
-            Combined search results
+            Combined search results sorted by fused score
         """
-        # Normalize weights
-        total_weight = vector_weight + text_weight
-        vector_weight = vector_weight / total_weight
-        text_weight = text_weight / total_weight
-        
         try:
-            # Vector search pipeline
+            # Build vector search pipeline (matches GenAI-Showcase pattern)
             vector_pipeline = [
                 {
                     "$vectorSearch": {
-                        "index": "vector_index",
+                        "index": index_name,
                         "path": "embedding",
                         "queryVector": query_embedding,
-                        "numCandidates": 100,
-                        "limit": limit * 2  # Get more for merging
-                    }
-                },
-                {
-                    "$addFields": {
-                        "vector_score": {"$meta": "vectorSearchScore"}
+                        "numCandidates": num_candidates,
+                        "limit": limit,
                     }
                 }
             ]
-            
-            # Text search pipeline
+
+            # Add filter to vector pipeline if provided
+            if filter_query:
+                vector_pipeline[0]["$vectorSearch"]["filter"] = filter_query
+
+            # Build text search pipeline
             text_pipeline = [
                 {
                     "$search": {
-                        "index": "text_index",  # Requires text index
+                        "index": text_index_name,
                         "text": {
-                            "query": text_query,
-                            "path": "content"
-                        }
-                    }
-                },
-                {
-                    "$limit": limit * 2
-                },
-                {
-                    "$addFields": {
-                        "text_score": {"$meta": "searchScore"}
+                            "query": query_text,
+                            "path": ["content"]
+                        },
                     }
                 }
             ]
-            
-            # Run both searches
-            vector_results = []
-            async for doc in self.collection.aggregate(vector_pipeline):
-                vector_results.append(doc)
-            
-            text_results = []
-            async for doc in self.collection.aggregate(text_pipeline):
-                text_results.append(doc)
-            
-            # Combine and score
-            combined = {}
-            
-            # Add vector results
-            for doc in vector_results:
-                doc_id = str(doc["_id"])
-                combined[doc_id] = {
-                    "doc": doc,
-                    "combined_score": doc["vector_score"] * vector_weight
-                }
-            
-            # Add/update with text results
-            for doc in text_results:
-                doc_id = str(doc["_id"])
-                if doc_id in combined:
-                    combined[doc_id]["combined_score"] += doc["text_score"] * text_weight
-                else:
-                    combined[doc_id] = {
-                        "doc": doc,
-                        "combined_score": doc["text_score"] * text_weight
+
+            # Add filter for text pipeline (as $match stage after $search)
+            if filter_query:
+                text_pipeline.append({"$match": filter_query})
+
+            # Add limit for text pipeline
+            text_pipeline.append({"$limit": limit})
+
+            # Build $rankFusion pipeline (MongoDB official pattern)
+            pipeline = [
+                {
+                    "$rankFusion": {
+                        "input": {
+                            "pipelines": {
+                                "vectorPipeline": vector_pipeline,
+                                "textPipeline": text_pipeline,
+                            }
+                        },
+                        "combination": {
+                            "weights": {
+                                "vectorPipeline": vector_weight,
+                                "textPipeline": text_weight,
+                            }
+                        },
+                        "scoreDetails": True,
                     }
-            
-            # Sort by combined score and return top results
-            sorted_results = sorted(
-                combined.values(),
-                key=lambda x: x["combined_score"],
-                reverse=True
-            )[:limit]
-            
+                },
+                {"$addFields": {"scoreDetails": {"$meta": "scoreDetails"}}},
+                {"$addFields": {"score": "$scoreDetails.value"}},
+                {"$limit": limit},
+                {
+                    "$project": {
+                        "_id": 1,
+                        "content": 1,
+                        "metadata": 1,
+                        "score": 1,
+                    }
+                },
+            ]
+
+            # Execute hybrid search
             results = []
-            for item in sorted_results:
-                doc = item["doc"]
+            async for doc in self.collection.aggregate(pipeline):
                 result = SearchResult(
                     id=str(doc.get("_id")),
                     content=doc.get("content", ""),
                     metadata=doc.get("metadata", {}),
-                    score=item["combined_score"]
+                    score=doc.get("score", 0.0)
                 )
                 results.append(result)
-            
+
             logger.debug(f"Hybrid search returned {len(results)} results")
             return results
-            
+
         except Exception as e:
-            logger.error(f"Hybrid search failed: {e}")
-            raise
+            # CRITICAL: Graceful fallback to vector-only search
+            # This ensures the system works even if text index is not ready
+            logger.warning(f"Hybrid search failed, falling back to vector search: {e}")
+            return await self.search(
+                query_embedding=query_embedding,
+                limit=limit,
+                num_candidates=num_candidates,
+                filter_query=filter_query,
+                index_name=index_name
+            )
     
     async def search_with_reranking(
         self,

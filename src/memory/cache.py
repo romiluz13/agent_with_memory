@@ -90,9 +90,24 @@ class SemanticCache(MemoryStore):
         self,
         query: str,
         limit: int = 1,
-        threshold: float = 0.95
+        threshold: float = 0.95,
+        search_mode: str = "hybrid"
     ) -> List[Memory]:
-        """Retrieve cached results for a query."""
+        """
+        Retrieve cached results for a query.
+
+        Uses hybrid search (vector + full-text) by default for best results.
+        Based on MongoDB's official GenAI-Showcase pattern with $rankFusion.
+
+        Args:
+            query: Search query text
+            limit: Maximum memories to return
+            threshold: Minimum similarity threshold (high for cache)
+            search_mode: Search strategy - "hybrid" (default), "semantic", or "text"
+
+        Returns:
+            List of cached results
+        """
         try:
             # First try exact match with cache key
             cache_key = self._generate_cache_key(query)
@@ -100,7 +115,7 @@ class SemanticCache(MemoryStore):
                 "metadata.cache_key": cache_key,
                 "ttl": {"$gt": datetime.utcnow()}
             })
-            
+
             if exact_match:
                 # Update hit statistics
                 await self.collection.update_one(
@@ -113,25 +128,37 @@ class SemanticCache(MemoryStore):
                         }
                     }
                 )
-                
+
                 exact_match["id"] = str(exact_match.pop("_id"))
                 memory = Memory(**exact_match)
                 logger.debug(f"Cache hit (exact): {cache_key[:8]}...")
                 return [memory]
-            
-            # Try semantic similarity search
+
+            # Try similarity search (hybrid or semantic)
             embedding_result = await self.embedding_service.generate_embedding(
                 query, input_type="query"
             )
-            
-            results = await self.search_engine.search(
-                query_embedding=embedding_result.embedding,
-                limit=limit,
-                filter_query={
-                    "memory_type": "cache",
-                    "ttl": {"$gt": datetime.utcnow()}
-                }
-            )
+
+            filter_query = {
+                "memory_type": "cache",
+                "ttl": {"$gt": datetime.utcnow()}
+            }
+
+            if search_mode == "hybrid":
+                # Hybrid search: vector + full-text with $rankFusion (DEFAULT)
+                results = await self.search_engine.hybrid_search(
+                    query_text=query,
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query
+                )
+            else:
+                # Vector-only search (semantic mode)
+                results = await self.search_engine.search(
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query
+                )
             
             # Only return if similarity is very high
             memories = []

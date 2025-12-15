@@ -184,36 +184,43 @@ class MemoryManager:
         memory_types: Optional[List[MemoryType]] = None,
         limit: int = 10,
         threshold: float = 0.7,
-        use_cache: bool = True
+        use_cache: bool = True,
+        search_mode: str = "hybrid"
     ) -> List[Memory]:
         """
         Retrieve relevant memories across specified types.
-        
+
+        Uses hybrid search (vector + full-text) by default for best results.
+        Based on MongoDB's official GenAI-Showcase pattern with $rankFusion.
+
         Args:
             query: Query text
             memory_types: Types to search (None = all)
             limit: Maximum memories to return
             threshold: Minimum similarity threshold
             use_cache: Whether to check cache first
-            
+            search_mode: Search strategy - "hybrid" (default), "semantic", or "text"
+
         Returns:
             List of relevant memories
         """
         # Check cache first if enabled
         if use_cache:
-            cache_results = await self.cache.retrieve(query, limit=1, threshold=0.95)
+            cache_results = await self.cache.retrieve(
+                query, limit=1, threshold=0.95, search_mode=search_mode
+            )
             if cache_results:
                 self.stats["cache_hits"] += 1
                 logger.debug(f"Cache hit for query: {query[:50]}...")
                 return cache_results
             self.stats["cache_misses"] += 1
-        
+
         # Generate query embedding
         embedding_result = await self.embedding_service.generate_embedding(
             query,
             input_type="query"
         )
-        
+
         # Determine which memory types to search
         if memory_types is None:
             memory_types = [
@@ -221,14 +228,16 @@ class MemoryManager:
                 MemoryType.PROCEDURAL,
                 MemoryType.SEMANTIC
             ]
-        
+
         # Search across specified memory types
         all_results = []
-        
+
         for memory_type in memory_types:
             if memory_type in self.stores:
                 store = self.stores[memory_type]
-                results = await store.retrieve(query, limit=limit, threshold=threshold)
+                results = await store.retrieve(
+                    query, limit=limit, threshold=threshold, search_mode=search_mode
+                )
                 all_results.extend(results)
         
         # Sort by relevance (score stored in metadata during retrieval)

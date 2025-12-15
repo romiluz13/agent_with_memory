@@ -63,21 +63,48 @@ class SemanticMemory(MemoryStore):
         self,
         query: str,
         limit: int = 10,
-        threshold: float = 0.7
+        threshold: float = 0.7,
+        search_mode: str = "hybrid"
     ) -> List[Memory]:
-        """Retrieve semantic memories by similarity."""
+        """
+        Retrieve semantic memories by similarity.
+
+        Uses hybrid search (vector + full-text) by default for best results.
+        Based on MongoDB's official GenAI-Showcase pattern with $rankFusion.
+
+        Args:
+            query: Search query text
+            limit: Maximum memories to return
+            threshold: Minimum similarity threshold
+            search_mode: Search strategy - "hybrid" (default), "semantic", or "text"
+
+        Returns:
+            List of relevant memories
+        """
         try:
             # Generate query embedding
             embedding_result = await self.embedding_service.generate_embedding(
                 query, input_type="query"
             )
-            
-            # Search for similar knowledge
-            results = await self.search_engine.search(
-                query_embedding=embedding_result.embedding,
-                limit=limit,
-                filter_query={"memory_type": "semantic"}
-            )
+
+            # Execute search based on mode
+            filter_query = {"memory_type": "semantic"}
+
+            if search_mode == "hybrid":
+                # Hybrid search: vector + full-text with $rankFusion (DEFAULT)
+                results = await self.search_engine.hybrid_search(
+                    query_text=query,
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query
+                )
+            else:
+                # Vector-only search (semantic mode)
+                results = await self.search_engine.search(
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query
+                )
             
             # Convert results to Memory objects
             memories = []

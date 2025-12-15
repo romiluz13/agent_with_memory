@@ -1,11 +1,13 @@
 """
 MongoDB Vector Index Management
-Creates and manages Atlas Vector Search indexes
+Creates and manages Atlas Vector Search indexes and Text Search indexes for hybrid search.
+
+Based on MongoDB's official GenAI-Showcase pattern.
 """
 
 import logging
 from motor.motor_asyncio import AsyncIOMotorCollection
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,65 @@ class VectorIndexManager:
                 logger.error(f"Error creating index: {e}")
                 return {"status": "error", "error": str(e)}
 
+    async def create_text_index(
+        self,
+        index_name: str = "text_search_index"
+    ) -> Dict[str, Any]:
+        """
+        Create a text search index for hybrid search.
+
+        Based on MongoDB GenAI-Showcase pattern.
+
+        Args:
+            index_name: Name of the text search index
+
+        Returns:
+            Index creation result
+        """
+        index_definition = {
+            "name": index_name,
+            "type": "search",
+            "definition": {
+                "mappings": {
+                    "dynamic": False,
+                    "fields": {
+                        "content": {
+                            "type": "string",
+                            "analyzer": "lucene.standard"
+                        },
+                        "metadata.tags": {"type": "string"},
+                        "agent_id": {"type": "string"},
+                        "user_id": {"type": "string"}
+                    }
+                }
+            }
+        }
+
+        try:
+            # Check if index exists
+            existing_indexes = await self.collection.list_search_indexes().to_list(length=None)
+            index_exists = any(idx.get("name") == index_name for idx in existing_indexes)
+
+            if index_exists:
+                logger.info(f"Text index '{index_name}' already exists on collection '{self.collection.name}'")
+                return {"status": "exists", "index_name": index_name}
+
+            # Create the index
+            result = await self.collection.create_search_index(index_definition)
+            logger.info(f"Successfully created text index '{index_name}' on collection '{self.collection.name}'")
+            return {"status": "created", "index_name": index_name, "result": result}
+
+        except Exception as e:
+            if "already exists" in str(e) or "duplicate" in str(e).lower():
+                logger.info(f"Text index '{index_name}' already exists")
+                return {"status": "exists", "index_name": index_name}
+            elif "not allowed" in str(e) or "permission" in str(e).lower():
+                logger.warning(f"Cannot create text index (may need Atlas permissions): {e}")
+                return {"status": "permission_error", "error": str(e)}
+            else:
+                logger.error(f"Error creating text index: {e}")
+                return {"status": "error", "error": str(e)}
+
 
 async def create_vector_index(collection: AsyncIOMotorCollection):
     """
@@ -118,12 +179,13 @@ MEMORY_COLLECTIONS = [
 ]
 
 
-async def ensure_all_vector_indexes(db) -> Dict[str, Any]:
+async def ensure_all_vector_indexes(db, include_text_indexes: bool = True) -> Dict[str, Any]:
     """
-    Create vector search indexes for all memory collections.
+    Create vector search indexes (and optionally text indexes) for all memory collections.
 
     Args:
         db: MongoDB database instance (AsyncIOMotorDatabase)
+        include_text_indexes: Also create text search indexes for hybrid search
 
     Returns:
         Dict mapping collection names to creation results
@@ -133,9 +195,17 @@ async def ensure_all_vector_indexes(db) -> Dict[str, Any]:
     for collection_name in MEMORY_COLLECTIONS:
         collection = db[collection_name]
         manager = VectorIndexManager(collection)
-        result = await manager.create_index()
-        results[collection_name] = result
-        logger.info(f"{collection_name}: {result['status']}")
+
+        # Create vector index
+        vector_result = await manager.create_index()
+        results[collection_name] = {"vector": vector_result}
+        logger.info(f"{collection_name} vector: {vector_result['status']}")
+
+        # Create text index for hybrid search
+        if include_text_indexes:
+            text_result = await manager.create_text_index()
+            results[collection_name]["text"] = text_result
+            logger.info(f"{collection_name} text: {text_result['status']}")
 
     return results
 

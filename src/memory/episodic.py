@@ -64,10 +64,14 @@ class EpisodicMemory(MemoryStore):
         limit: int = 10,
         threshold: float = 0.7,
         agent_id: Optional[str] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        search_mode: str = "hybrid"
     ) -> List[Memory]:
         """
         Retrieve episodic memories by similarity.
+
+        Uses hybrid search (vector + full-text) by default for best results.
+        Based on MongoDB's official GenAI-Showcase pattern with $rankFusion.
 
         Args:
             query: Search query text
@@ -75,12 +79,13 @@ class EpisodicMemory(MemoryStore):
             threshold: Minimum similarity threshold
             agent_id: Filter by agent (CRITICAL for multi-tenant isolation)
             user_id: Filter by user (for user isolation)
+            search_mode: Search strategy - "hybrid" (default), "semantic", or "text"
 
         Returns:
             List of relevant memories
         """
         try:
-            # Generate query embedding
+            # Generate query embedding (needed for hybrid and semantic modes)
             embedding_result = await self.embedding_service.generate_embedding(
                 query, input_type="query"
             )
@@ -92,13 +97,24 @@ class EpisodicMemory(MemoryStore):
             if user_id:
                 filter_query["user_id"] = user_id
 
-            # Search for similar memories with isolation filters
-            results = await self.search_engine.search(
-                query_embedding=embedding_result.embedding,
-                limit=limit,
-                filter_query=filter_query if filter_query else None
-            )
-            
+            # Execute search based on mode
+            if search_mode == "hybrid":
+                # Hybrid search: vector + full-text with $rankFusion (DEFAULT)
+                # Falls back to vector-only if text index unavailable
+                results = await self.search_engine.hybrid_search(
+                    query_text=query,
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query if filter_query else None
+                )
+            else:
+                # Vector-only search (semantic mode or fallback)
+                results = await self.search_engine.search(
+                    query_embedding=embedding_result.embedding,
+                    limit=limit,
+                    filter_query=filter_query if filter_query else None
+                )
+
             # Convert results to Memory objects
             memories = []
             for result in results:
@@ -109,10 +125,12 @@ class EpisodicMemory(MemoryStore):
                         doc["id"] = str(doc.pop("_id"))
                         memory = Memory(**doc)
                         memory.metadata["search_score"] = result.score
+                        memory.metadata["search_mode"] = search_mode
                         memories.append(memory)
-            
+
+            logger.debug(f"Retrieved {len(memories)} memories using {search_mode} search")
             return memories
-            
+
         except Exception as e:
             logger.error(f"Failed to retrieve episodic memories: {e}")
             return []
