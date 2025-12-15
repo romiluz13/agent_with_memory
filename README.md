@@ -1,397 +1,288 @@
-# 🧠 AI Agent Boilerplate with Memory
+# 🧠 Agent With Memory (AWM 2.0)
 
-Production-ready AI agent framework with sophisticated 5-component memory system, built on MongoDB Atlas and LangGraph.
+**Production-ready AI memory system for any agent.** Built on MongoDB Atlas Vector Search.
 
-## 🌐 **[View Landing Page →](https://agentwithmemory.replit.app/)**
+## 🎯 What This Is
 
-**Experience the full showcase of features, comparisons, and live demos at our beautiful landing page.**
+A **plug-and-play memory layer** that gives any AI agent persistent memory across sessions. Your agent remembers users, learns from interactions, and builds knowledge over time.
 
-## 🎯 Why Memory Matters for AI Agents
-
-Traditional LLMs forget everything between conversations. This boilerplate solves that with a **persistent, searchable memory system** that enables:
-
-- **Context Retention**: Agents remember past interactions across sessions
-- **Learning from Experience**: Agents improve by storing successful patterns
-- **Personalization**: Each user gets an agent that knows their history
-- **Knowledge Accumulation**: Agents build domain expertise over time
-- **Efficient Recall**: Vector search finds relevant memories instantly
-
-Without memory, you're just using ChatGPT. With memory, you have a true AI agent that learns and grows.
+**Without memory**: ChatGPT that forgets everything.
+**With memory**: A true AI agent that learns and grows.
 
 ## ⚡ Quick Start (5 Minutes)
 
 ```bash
-# 1. Clone and setup
+# 1. Clone
 git clone https://github.com/romiluz13/agent_with_memory.git
 cd agent_with_memory
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
 
-# 2. Install dependencies
+# 2. Setup
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
-# 3. Configure environment
-cp .env.example .env
-# Edit .env with your API keys
+# 3. Configure (create .env file)
+MONGODB_URI=mongodb+srv://...
+VOYAGE_API_KEY=pa-...
+GOOGLE_API_KEY=AIza...
 
-# 4. Run example agent
-python examples/mongodb_langgraph_example.py
-
-# Or use the AgentBuilder for instant agents:
-python PERFECT_AGENT_EXAMPLE.py
+# 4. Run the demo
+python demo_memory_agent.py
 ```
+
+The demo proves memory works across sessions:
+- **Session 1**: Tell the agent your name, job, pet, etc.
+- **Session 2**: NEW session asks what it remembers → It recalls everything!
+
+## 🔌 Plug & Play - Add Memory to ANY Agent
+
+```python
+from src.memory.manager import MemoryManager
+from src.memory.base import MemoryType
+from src.storage.mongodb_client import MongoDBClient, MongoDBConfig
+
+# 1. Connect to MongoDB
+config = MongoDBConfig(uri="mongodb+srv://...", database="my_app")
+db_client = MongoDBClient()
+await db_client.initialize(config)
+
+# 2. Create Memory Manager
+memory = MemoryManager(db_client.db)
+
+# 3. Store memories (from your agent's conversations)
+await memory.store_memory(
+    content="User said they love Python and work at Google",
+    memory_type=MemoryType.EPISODIC,
+    agent_id="my_agent",
+    user_id="user_123"
+)
+
+# 4. Retrieve relevant memories (before responding)
+memories = await memory.episodic.retrieve(
+    query="What programming language does the user like?",
+    agent_id="my_agent",
+    user_id="user_123",
+    limit=5
+)
+
+# 5. Use memories in your agent's context
+for mem in memories:
+    print(f"Remembered: {mem.content}")
+```
+
+**That's it!** 5 lines to add persistent memory to any agent.
+
+## 🧠 7-Type Memory System
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| **EPISODIC** | Conversation history | "User asked about Python tutorials" |
+| **SEMANTIC** | Facts & knowledge | "MongoDB supports vector search" |
+| **PROCEDURAL** | How-to workflows | "To deploy: build → push → update" |
+| **WORKING** | Current session context | "Currently helping with optimization" |
+| **CACHE** | Fast retrieval | Frequently accessed data |
+| **ENTITY** | People, places, things | "John works at Google" |
+| **SUMMARY** | Compressed context | Condensed conversation summaries |
 
 ## 🏗️ Architecture
 
-Built on **MongoDB's Official LangGraph Integration** patterns:
-
 ```
 ┌─────────────────────────────────────────┐
-│           Client (Web/API)              │
+│         Your Agent (Any Framework)       │
+│   LangChain, LangGraph, Custom, etc.    │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
-│            FastAPI + WebSocket          │
+│           MemoryManager                  │
+│   • store_memory()                       │
+│   • retrieve_memories()                  │
+│   • extract_entities()                   │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
-│     LangGraph with MongoDB Memory       │
-│   • MongoDBSaver (Short-term/Sessions)  │
-│   • MongoDBStore (Long-term/Persistent) │
-└───┬─────────────────────────────┬───────┘
-    │                             │
-┌───▼──────────┐       ┌─────────▼────────┐
-│ 5-Component  │       │   Tool Framework  │
-│   Memory     │       │  (Extensible)     │
-│   System     │       └──────────────────┘
-└──────────────┘
-    │
-┌───▼──────────────────────────────────────┐
 │     MongoDB Atlas + Vector Search        │
-│   • Voyage AI Embeddings                 │
-│   • Cosine Similarity                   │
+│   • Voyage AI Embeddings (1024 dims)    │
+│   • Cosine Similarity Search            │
+│   • Multi-tenant Isolation              │
 └──────────────────────────────────────────┘
 ```
 
-## 🧠 5-Component Memory System
-
-### 1. **Episodic Memory** - Conversation History
-```python
-# Stores: User interactions, conversation context, temporal sequences
-agent.memory.episodic.store("User asked about Python tutorials")
-```
-
-### 2. **Procedural Memory** - Learned Workflows  
-```python
-# Stores: Step-by-step processes, successful patterns, automation sequences
-agent.memory.procedural.store("To debug: 1. Check logs 2. Verify config 3. Test connections")
-```
-
-### 3. **Semantic Memory** - Domain Knowledge
-```python
-# Stores: Facts, concepts, relationships, domain expertise
-agent.memory.semantic.store("MongoDB Atlas supports vector search with cosine similarity")
-```
-
-### 4. **Working Memory** - Current Context
-```python
-# Stores: Active session data, temporary context, current focus
-agent.memory.working.store("Currently helping user with database optimization")
-```
-
-### 5. **Semantic Cache** - Performance Optimization
-```python
-# Stores: Frequently accessed information, query results, computed responses
-agent.memory.cache.get("common_database_questions")
-```
-
-## 🚀 Features
-
-- **🔥 MongoDB + LangGraph**: Official integration patterns
-- **🧠 Sophisticated Memory**: 5-component memory system that actually learns
-- **🎯 AgentBuilder**: Pre-built agent templates for instant deployment
-- **⚡ Vector Search**: Semantic memory recall with MongoDB Atlas
-- **🔧 Dynamic Configuration**: Custom tools & system prompts without code changes
-- **🔍 Observability**: Galileo AI for LLM monitoring
-- **🛠️ Production Ready**: FastAPI, Docker, comprehensive testing
-- **📚 Document Ingestion**: PDF processing for knowledge base creation
-- **🔌 MCP Support**: Model Context Protocol for 100+ external tools
-- **🌊 Streaming**: Real-time responses via WebSocket and SSE
-
-## 🔌 NEW: MCP (Model Context Protocol) Support
-
-Connect your agents to 100+ external tools with zero code:
-
-### What is MCP?
-MCP is an open protocol by Anthropic that standardizes how AI agents connect to external tools. Think of it as "USB for AI tools" - plug and play!
-
-### Available MCP Tools
-- **File System**: Read, write, and manage files
-- **GitHub**: Search repos, create issues, manage PRs
-- **Brave Search**: Web search capabilities
-- **Slack**: Send messages and manage channels
-- **Google Drive**: Document management
-- **Puppeteer**: Web automation and scraping
-- **Memory**: Additional persistent memory layers
-- And 100+ more community tools!
-
-### Quick Setup
-```python
-from src.core.agent import BaseAgent, AgentConfig
-
-# Enable MCP in your agent config
-config = AgentConfig(
-    name="mcp_agent",
-    enable_mcp=True,
-    mcp_servers=[
-        "npx @modelcontextprotocol/server-filesystem",
-        "npx @modelcontextprotocol/server-github",
-        "npx @modelcontextprotocol/server-brave-search"
-    ]
-)
-
-# That's it! Your agent now has access to all MCP tools
-agent = BaseAgent(config, memory_manager)
-
-# Use MCP tools naturally
-response = await agent.ainvoke("Search GitHub for langchain examples")
-```
-
-### Configuration
-Add to your `.env`:
-```bash
-MCP_ENABLED=true
-MCP_SERVERS="npx @modelcontextprotocol/server-filesystem,npx @modelcontextprotocol/server-github"
-MCP_GITHUB_TOKEN=your_github_token  # Optional: for GitHub MCP
-MCP_BRAVE_API_KEY=your_brave_key    # Optional: for Brave search
-```
-
-See `MCP_AGENT_EXAMPLE.py` for a complete working example!
-
-## 🎯 AgentBuilder - Instant Agents
-
-Create specialized agents in seconds:
-
-```python
-from src.core.agent_builder import AgentBuilder
-
-# Create a customer support agent
-agent = AgentBuilder.create_customer_support_agent(
-    company_name="YourCompany"
-)
-
-# Create a research assistant
-agent = AgentBuilder.create_research_assistant(
-    domain="quantum computing"
-)
-
-# Or build custom agents with your tools
-agent = AgentBuilder.create_agent(
-    agent_name="my_custom_agent",
-    system_prompt="You are a specialized assistant...",
-    user_tools=[your_custom_tool1, your_custom_tool2]
-)
-```
-
-## 📦 Project Structure
+## 📁 Project Structure
 
 ```
 agent_with_memory/
+├── demo_memory_agent.py    # 🚀 START HERE - Real-life demo
 ├── src/
-│   ├── core/              # Agent implementations
-│   ├── memory/            # 5-component memory system
-│   ├── ingestion/         # Document processing
-│   ├── embeddings/        # Voyage AI integration
-│   ├── storage/           # MongoDB utilities
-│   ├── observability/     # Galileo monitoring
-│   └── api/               # FastAPI backend
-├── examples/              # Ready-to-run examples
-├── tests/                 # Comprehensive test suite
-├── infrastructure/        # Docker & deployment configs
-└── requirements.txt       # Python dependencies
+│   ├── memory/             # 7-type memory system
+│   │   ├── manager.py      # Main orchestrator
+│   │   ├── episodic.py     # Conversation history
+│   │   ├── semantic.py     # Facts & knowledge
+│   │   ├── procedural.py   # Workflows
+│   │   ├── working.py      # Session context
+│   │   ├── cache.py        # Fast retrieval
+│   │   ├── entity.py       # Entity extraction
+│   │   └── summary.py      # Context compression
+│   ├── context/            # Token management
+│   │   ├── engineer.py     # Auto-compression at 80%
+│   │   └── summarizer.py   # LLM summarization
+│   ├── storage/            # MongoDB integration
+│   │   ├── mongodb_client.py
+│   │   └── vector_index.py
+│   ├── embeddings/         # Voyage AI
+│   │   └── voyage_client.py
+│   └── retrieval/          # Vector search
+│       └── vector_search.py
+├── tests/                  # Comprehensive test suite
+└── CLAUDE.md               # Project documentation
 ```
 
-## 🔧 Configuration
+## 🔧 Key Features
 
-### Environment Variables (.env)
-
-```bash
-# MongoDB Atlas
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/
-MONGODB_DB_NAME=agent_memory_db
-
-# AI Services
-VOYAGE_API_KEY=your_voyage_key
-OPENAI_API_KEY=your_openai_key
-
-# Observability (Optional)
-GALILEO_API_KEY=your_galileo_key
-GALILEO_PROJECT_NAME=agent_with_memory
-```
-
-## 💻 Usage Examples
-
-### Using AgentBuilder (Recommended)
+### Multi-Tenant Isolation
+Each agent and user has isolated memories:
 ```python
-from src.core.agent_builder import AgentBuilder
-
-# Quick start with pre-built templates
-agent = AgentBuilder.create_customer_support_agent("YourCompany")
-
-# Or create custom agent with your tools
-from langchain.agents import tool
-
-@tool
-def get_weather(location: str) -> str:
-    """Get weather for a location"""
-    return f"Weather in {location}: Sunny, 72°F"
-
-agent = AgentBuilder.create_agent(
-    agent_name="weather_assistant",
-    system_prompt="You are a helpful weather assistant.",
-    user_tools=[get_weather]
-)
+# Agent A's memories are separate from Agent B's
+await memory.store_memory(..., agent_id="agent_a", user_id="user_1")
+await memory.store_memory(..., agent_id="agent_b", user_id="user_1")
 ```
 
-### Direct Agent Creation
+### Entity Extraction
+Automatically extract people, organizations, locations:
 ```python
-from src.core.agent_langgraph import MongoDBLangGraphAgent
-
-# Initialize agent
-agent = MongoDBLangGraphAgent(
-    mongodb_uri=os.getenv("MONGODB_URI"),
-    agent_name="assistant",
-    model_provider="openai",
-    model_name="gpt-4o",
-    system_prompt="Custom prompt here",  # Optional
-    user_tools=[your_tools]  # Optional
+entities = await memory.extract_entities(
+    text="I'm John, a software engineer at Google",
+    agent_id="my_agent",
+    llm=your_llm
 )
-
-# Chat with memory
-response = await agent.aexecute(
-    "What did we discuss about Python yesterday?",
-    thread_id="user_123"
-)
+# Returns: [{"name": "John", "type": "PERSON"}, {"name": "Google", "type": "ORGANIZATION"}]
 ```
 
-### Document Ingestion
+### Context Compression
+Auto-compress when context gets too long:
 ```python
-from src.ingestion import MongoDBDocumentIngestion
+from src.context.engineer import ContextEngineer
 
-# Process documents
-ingestion = MongoDBDocumentIngestion(
-    mongodb_uri=os.getenv("MONGODB_URI")
-)
-
-# Ingest PDF
-result = await ingestion.ingest_pdf("documents/manual.pdf")
+engineer = ContextEngineer()
+if engineer.should_compress(context, model="gpt-4"):
+    compressed = await engineer.compress(context, llm)
 ```
 
-### Memory Operations
+### Vector Search with Filters
+Find relevant memories with semantic search:
 ```python
-# Store different types of memories
-await agent.memory.episodic.store("User prefers technical explanations")
-await agent.memory.semantic.store("FastAPI is a modern Python web framework")
-await agent.memory.procedural.store("To deploy: 1. Build image 2. Push to registry 3. Update config")
-
-# Retrieve relevant memories
-memories = await agent.memory.retrieve("web framework deployment")
+memories = await memory.episodic.retrieve(
+    query="What does the user like?",
+    agent_id="my_agent",
+    user_id="user_123",
+    limit=5,
+    threshold=0.5  # Similarity threshold
+)
 ```
 
 ## 🧪 Testing
 
 ```bash
 # Run all tests
-pytest
+python -m pytest tests/ -v
 
-# Run specific test categories
-pytest tests/unit/
-pytest tests/integration/
-pytest tests/e2e/
-
-# Run with coverage
-pytest --cov=src --cov-report=html
+# Run specific tests
+python -m pytest tests/integration/test_multi_tenant_isolation.py -v
+python -m pytest tests/integration/test_entity_extraction.py -v
 ```
 
-## 🐳 Docker Deployment
+## 📝 Environment Variables
 
 ```bash
-# Build and run
-docker-compose up -d
+# Required
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/
+VOYAGE_API_KEY=pa-...          # For embeddings
+GOOGLE_API_KEY=AIza...         # For LLM (or use OpenAI)
 
-# Scale API instances
-docker-compose up -d --scale api=3
-
-# Production deployment
-docker-compose -f docker-compose.prod.yml up -d
+# Optional
+OPENAI_API_KEY=sk-...          # Alternative LLM
+ANTHROPIC_API_KEY=sk-ant-...   # Alternative LLM
 ```
 
-## 📊 Monitoring with Galileo AI
+## 🚀 MongoDB Atlas Setup
 
-Track LLM performance, RAG quality, and user interactions:
+1. Create a [MongoDB Atlas](https://www.mongodb.com/atlas) account (free tier works!)
+2. Create a cluster
+3. Get your connection string
+4. The system auto-creates collections and vector indexes
 
-- **Generation Metrics**: Response time, token usage, model performance
-- **Retrieval Quality**: Search relevance scores, document quality  
-- **Memory Analytics**: Usage patterns, effectiveness metrics
-- **Error Tracking**: Automatic error detection and alerting
+### Required Vector Index
 
-## 🛠️ Development
+The system creates this automatically, but for reference:
+```json
+{
+  "name": "vector_index",
+  "type": "vectorSearch",
+  "definition": {
+    "fields": [
+      {"type": "vector", "path": "embedding", "similarity": "cosine", "numDimensions": 1024},
+      {"type": "filter", "path": "agent_id"},
+      {"type": "filter", "path": "user_id"}
+    ]
+  }
+}
+```
 
-### Adding Custom Tools
+## 🤝 Integration Examples
+
+### With LangChain
 ```python
-from langchain.agents import tool
+from langchain_openai import ChatOpenAI
+from src.memory.manager import MemoryManager
 
-@tool
-def custom_search(query: str) -> str:
-    """Custom search implementation."""
-    return f"Results for: {query}"
+llm = ChatOpenAI(model="gpt-4")
+memory = MemoryManager(db)
 
-# Add to agent
-agent.tools.append(custom_search)
+# Before each LLM call, retrieve relevant memories
+memories = await memory.episodic.retrieve(query=user_input, agent_id="my_agent")
+context = "\n".join([m.content for m in memories])
+
+response = llm.invoke(f"Context:\n{context}\n\nUser: {user_input}")
+
+# After LLM response, store the interaction
+await memory.store_memory(
+    content=f"User: {user_input}\nAssistant: {response}",
+    memory_type=MemoryType.EPISODIC,
+    agent_id="my_agent"
+)
 ```
 
-### Creating Specialized Agents
+### With LangGraph
 ```python
-class ResearchAgent(MongoDBLangGraphAgent):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Add research-specific tools and prompts
+from langgraph.graph import StateGraph
+from src.memory.manager import MemoryManager
+
+memory = MemoryManager(db)
+
+def memory_node(state):
+    # Retrieve memories before processing
+    memories = await memory.episodic.retrieve(
+        query=state["input"],
+        agent_id=state["agent_id"]
+    )
+    state["context"] = memories
+    return state
+
+# Add to your graph
+workflow.add_node("memory", memory_node)
 ```
-
-## 📚 Documentation
-
-- **API Reference**: `/docs` when running FastAPI server
-- **Architecture Guide**: `examples/` directory
-- **Memory System**: `src/memory/` implementation
-- **MongoDB Integration**: Based on official [docs-notebooks](https://github.com/mongodb/docs-notebooks/)
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - Use it, modify it, ship it!
 
 ## 🙏 Acknowledgments
 
-- **MongoDB**: Official LangGraph integration patterns
-- **LangChain/LangGraph**: Agent orchestration framework
+- **MongoDB**: Atlas Vector Search
 - **Voyage AI**: High-quality embeddings
-- **Galileo AI**: LLM observability platform
-
-## 🆘 Support
-
-- 📧 Issues: [GitHub Issues](https://github.com/romiluz13/agent_with_memory/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/romiluz13/agent_with_memory/discussions)
-- 📖 Documentation: [Wiki](https://github.com/romiluz13/agent_with_memory/wiki)
+- **LangChain/LangGraph**: Agent frameworks
 
 ---
 
-**Built with ❤️ for the AI community**
+**Built for the AI community** 🚀
 
-*Clone → Configure → Deploy in 5 minutes* 🚀
+*Clone → Configure → Remember Everything*
