@@ -13,6 +13,7 @@ langchain-openai>=0.2.0
 langchain-anthropic>=0.2.0
 langchain-google-genai>=2.0.0
 langchain-voyageai>=0.1.0  # Voyage AI for embeddings
+voyageai>=0.3.0  # Direct Voyage AI client (required for VoyageEmbeddingService)
 
 # MongoDB and storage
 motor>=3.6.0  # Async MongoDB driver
