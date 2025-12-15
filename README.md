@@ -102,7 +102,7 @@ for mem in memories:
 ┌────────────────▼────────────────────────┐
 │     MongoDB Atlas + Vector Search        │
 │   • Voyage AI Embeddings (1024 dims)    │
-│   • Cosine Similarity Search            │
+│   • Hybrid Search (vector + full-text)  │
 │   • Multi-tenant Isolation              │
 └──────────────────────────────────────────┘
 ```
@@ -112,6 +112,8 @@ for mem in memories:
 ```
 agent_with_memory/
 ├── demo_memory_agent.py    # 🚀 START HERE - Real-life demo
+├── scripts/
+│   └── setup_indexes.py    # Create vector + text indexes
 ├── src/
 │   ├── memory/             # 7-type memory system
 │   │   ├── manager.py      # Main orchestrator
@@ -130,7 +132,7 @@ agent_with_memory/
 │   │   └── vector_index.py
 │   ├── embeddings/         # Voyage AI
 │   │   └── voyage_client.py
-│   └── retrieval/          # Vector search
+│   └── retrieval/          # Hybrid search ($rankFusion)
 │       └── vector_search.py
 ├── tests/                  # Comprehensive test suite
 └── CLAUDE.md               # Project documentation
@@ -167,17 +169,24 @@ if engineer.should_compress(context, model="gpt-4"):
     compressed = await engineer.compress(context, llm)
 ```
 
-### Vector Search with Filters
-Find relevant memories with semantic search:
+### Hybrid Search (Vector + Full-Text)
+Find relevant memories using MongoDB's `$rankFusion` for best results:
 ```python
+# Hybrid search is the DEFAULT - combines semantic + keyword matching
 memories = await memory.episodic.retrieve(
     query="What does the user like?",
     agent_id="my_agent",
     user_id="user_123",
     limit=5,
-    threshold=0.5  # Similarity threshold
+    threshold=0.5,
+    search_mode="hybrid"  # Default - can also use "semantic" or "text"
 )
 ```
+
+**Why hybrid?**
+- "John" → Exact keyword match finds the person
+- "software developer" → Semantic similarity finds "engineer"
+- Combined → Best of both worlds
 
 ## 🧪 Testing
 
@@ -208,11 +217,18 @@ ANTHROPIC_API_KEY=sk-ant-...   # Alternative LLM
 1. Create a [MongoDB Atlas](https://www.mongodb.com/atlas) account (free tier works!)
 2. Create a cluster
 3. Get your connection string
-4. The system auto-creates collections and vector indexes
+4. Run the setup script to create indexes:
 
-### Required Vector Index
+```bash
+# Create all required indexes (vector + text for hybrid search)
+python scripts/setup_indexes.py
+```
 
-The system creates this automatically, but for reference:
+### Search Indexes
+
+The setup script creates **14 indexes** (7 vector + 7 text) for hybrid search:
+
+**Vector Index** (for semantic similarity):
 ```json
 {
   "name": "vector_index",
@@ -226,6 +242,25 @@ The system creates this automatically, but for reference:
   }
 }
 ```
+
+**Text Index** (for keyword matching):
+```json
+{
+  "name": "text_search_index",
+  "type": "search",
+  "definition": {
+    "mappings": {
+      "fields": {
+        "content": {"type": "string", "analyzer": "lucene.standard"},
+        "agent_id": {"type": "string"},
+        "user_id": {"type": "string"}
+      }
+    }
+  }
+}
+```
+
+> **Note**: Indexes take 1-5 minutes to build after creation. The system gracefully falls back to vector-only search until text indexes are ready.
 
 ## 🤝 Integration Examples
 
