@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-AWM 2.0 is a sophisticated AI agent framework that implements a 7-type memory system inspired by cognitive science and Oracle AI Developer Hub innovations. The system uses MongoDB for persistent storage with vector search capabilities.
+AWM 2.0 is a sophisticated AI agent framework that implements a 7-type memory system inspired by cognitive science. The system uses MongoDB for persistent storage with vector search capabilities.
 
 ## Architecture
 

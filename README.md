@@ -111,9 +111,10 @@ for mem in memories:
 
 ```
 agent_with_memory/
-├── demo_memory_agent.py    # 🚀 START HERE - Real-life demo
+├── demo_memory_agent.py    # START HERE - Real-life demo
 ├── scripts/
-│   └── setup_indexes.py    # Create vector + text indexes
+│   ├── setup_indexes.py    # Create vector + text indexes
+│   └── setup_test_indexes.py # Create indexes for test DBs
 ├── src/
 │   ├── memory/             # 7-type memory system
 │   │   ├── manager.py      # Main orchestrator
@@ -132,9 +133,19 @@ agent_with_memory/
 │   │   └── vector_index.py
 │   ├── embeddings/         # Voyage AI
 │   │   └── voyage_client.py
-│   └── retrieval/          # Hybrid search ($rankFusion)
-│       └── vector_search.py
-├── tests/                  # Comprehensive test suite
+│   └── retrieval/          # Advanced search system
+│       ├── vector_search.py    # Main search engine
+│       ├── config.py           # Search configuration
+│       ├── rrf.py              # Reciprocal Rank Fusion
+│       ├── tier_support.py     # Atlas tier detection
+│       ├── score_parser.py     # Score extraction
+│       └── filters/            # Filter builders
+│           ├── vector_search_filters.py  # MQL filters
+│           ├── atlas_search_filters.py   # Atlas Search filters
+│           └── lexical_prefilters.py     # MongoDB 8.2+ prefilters
+├── tests/
+│   ├── retrieval/          # 148 unit tests
+│   └── integration/        # E2E production tests
 └── CLAUDE.md               # Project documentation
 ```
 
@@ -188,16 +199,39 @@ memories = await memory.episodic.retrieve(
 - "software developer" → Semantic similarity finds "engineer"
 - Combined → Best of both worlds
 
+### Atlas Tier Support
+Works on ALL MongoDB Atlas tiers with automatic fallback:
+
+| Tier | $rankFusion | Text Search | Fallback |
+|------|-------------|-------------|----------|
+| **M10+** | Native | Full | - |
+| **M0/M2** | Manual RRF | Full | Reciprocal Rank Fusion |
+| **Vector-only** | - | - | Vector search only |
+
+The system auto-detects your cluster tier and uses the best available strategy.
+
 ## 🧪 Testing
 
 ```bash
-# Run all tests
+# Run all tests (154+ tests)
 python -m pytest tests/ -v
 
-# Run specific tests
-python -m pytest tests/integration/test_multi_tenant_isolation.py -v
-python -m pytest tests/integration/test_entity_extraction.py -v
+# Unit tests for retrieval system (148 tests)
+python -m pytest tests/retrieval/ -v
+
+# Production-realistic E2E tests (6 scenarios)
+python -m pytest tests/integration/test_production_realistic.py -v
 ```
+
+### Production Test Scenarios
+| Test | What it Validates |
+|------|-------------------|
+| Customer Support Conversation | Full memory store/retrieve flow |
+| Multi-Tenant Isolation | Agent isolation via agent_id |
+| Long Conversation Memory | Memory over 20+ turns |
+| Cross-Session Persistence | Data persists across sessions |
+| Concurrent Users Stress | 100 users, 1000 operations |
+| Hybrid Search Quality | Vector + text fusion |
 
 ## 📝 Environment Variables
 

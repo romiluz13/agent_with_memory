@@ -180,6 +180,12 @@ TEMP_*.md
 # Claude Code development configuration (local rules only)
 .claude/rules/
 .claude/todos/
+.claude/cc10x/
+.claude/settings.local.json
+
+# Debug test files (internal)
+tests/integration/test_debug_retrieval.py
+tests/integration/test_focused_debug.py
 
 # MongoDB GenAI-Showcase reference (cloned for hybrid search patterns)
 .genai-showcase/
