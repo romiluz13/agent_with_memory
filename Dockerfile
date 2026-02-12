@@ -46,7 +46,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY --chown=agent:agent ./src ./src
-COPY --chown=agent:agent ./scripts ./scripts
+#COPY --chown=agent:agent ./scripts ./scripts
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/data && \
