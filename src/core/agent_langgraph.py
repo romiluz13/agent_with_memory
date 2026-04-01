@@ -23,6 +23,8 @@ from langgraph.graph.message import add_messages
 from langgraph.store.mongodb import MongoDBStore, create_vector_index_config
 from pymongo import MongoClient
 
+from ..observability.tracer import get_tracer
+
 logger = logging.getLogger(__name__)
 
 
@@ -233,10 +235,13 @@ class MongoDBLangGraphAgent:
         # Create tools map
         tools_by_name = {tool.name: tool for tool in self.tools}
 
-        # Define agent node
+        # Define agent node (with optional observability tracing)
         def agent(state: GraphState) -> dict[str, list]:
             messages = state["messages"]
-            result = llm_with_tools.invoke(messages)
+            # Pass LangChain callback handler when tracing is enabled
+            handler = get_tracer().get_langchain_handler()
+            invoke_config = {"callbacks": [handler]} if handler else {}
+            result = llm_with_tools.invoke(messages, config=invoke_config)
             return {"messages": [result]}
 
         # Define tools node

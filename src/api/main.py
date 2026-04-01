@@ -3,7 +3,9 @@ FastAPI Main Application
 Production-ready API for AI Agent Boilerplate
 """
 
+import importlib.util as _ilu
 import os
+import pathlib as _pathlib
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -67,6 +69,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Route Registration (new feature routes) ---
+# NOTE: Existing routes (/health, /chat, /api/v1/agents) remain inline below.
+# New feature routes are registered via include_router() here.
+# To register a new route file:
+#   1. Create src/api/routes/<feature>.py with `router = APIRouter()`
+#   2. Add include_router() call here with appropriate prefix and tags
+#
+# Registered dynamically by each phase when route files are created:
+
+# Import feature routes directly from file to avoid triggering
+# src.api.routes.__init__ which eagerly imports modules with uninstalled
+# dependencies (langchain_mcp_adapters in agents.py).
+_eval_spec = _ilu.spec_from_file_location(
+    "src.api.routes.evaluation",
+    _pathlib.Path(__file__).parent / "routes" / "evaluation.py",
+)
+_eval_mod = _ilu.module_from_spec(_eval_spec)
+_eval_spec.loader.exec_module(_eval_mod)
+app.include_router(_eval_mod.router, prefix="/api/v1/evaluate", tags=["evaluation"])
+
+_nlq_spec = _ilu.spec_from_file_location(
+    "src.api.routes.nl_query",
+    _pathlib.Path(__file__).parent / "routes" / "nl_query.py",
+)
+_nlq_mod = _ilu.module_from_spec(_nlq_spec)
+_nlq_spec.loader.exec_module(_nlq_mod)
+app.include_router(_nlq_mod.router, prefix="/api/v1/query", tags=["nl-query"])
+
+_hitl_spec = _ilu.spec_from_file_location(
+    "src.api.routes.hitl",
+    _pathlib.Path(__file__).parent / "routes" / "hitl.py",
+)
+_hitl_mod = _ilu.module_from_spec(_hitl_spec)
+_hitl_spec.loader.exec_module(_hitl_mod)
+app.include_router(_hitl_mod.router, prefix="/api/v1/hitl", tags=["hitl"])
+
+_tt_spec = _ilu.spec_from_file_location(
+    "src.api.routes.time_travel",
+    _pathlib.Path(__file__).parent / "routes" / "time_travel.py",
+)
+_tt_mod = _ilu.module_from_spec(_tt_spec)
+_tt_spec.loader.exec_module(_tt_mod)
+app.include_router(_tt_mod.router, prefix="/api/v1/time-travel", tags=["time-travel"])
 
 
 @app.get("/", response_model=dict[str, str])

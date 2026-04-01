@@ -107,16 +107,98 @@ for mem in memories:
 └──────────────────────────────────────────┘
 ```
 
-## 📁 Project Structure
+## State-of-the-Art Features (v2.1)
+
+Built on the [LangChain + MongoDB Partnership](https://blog.langchain.com/announcing-the-langchain-mongodb-partnership-the-ai-agent-stack-that-runs-on-the-database-you-already-trust/) architecture:
+
+### Observability Tracing
+End-to-end tracing of memory operations, retrieval calls, and agent decisions.
+```python
+# Just set env vars - zero-overhead when disabled
+export LANGFUSE_PUBLIC_KEY=pk-...
+export LANGFUSE_SECRET_KEY=sk-...
+# All memory store/retrieve operations are automatically traced
+```
+
+### RAG Evaluation Pipeline
+Measure retrieval quality with LLM-as-judge metrics:
+```python
+from src.evaluation.evaluator import RAGEvaluator
+evaluator = RAGEvaluator(llm=your_llm)
+result = await evaluator.evaluate(
+    question="What does the user like?",
+    answer="The user likes Python",
+    contexts=["User said they love Python"]
+)
+# Returns: precision, recall, relevancy, faithfulness scores
+```
+
+### Natural Language to MongoDB Queries (Text-to-MQL)
+Agents query operational data using plain English:
+```python
+from src.tools.nl_to_mql import NLToMQLGenerator
+generator = NLToMQLGenerator(db=db, llm=llm)
+result = await generator.generate_query(
+    question="Show all episodic memories from last week",
+    agent_id="my_agent"
+)
+# Generates safe MQL with agent_id injection, collection whitelist, read-only enforcement
+```
+
+### GraphRAG (Knowledge Graph Retrieval)
+Entity relationships with MongoDB `$graphLookup` traversal:
+```python
+from src.memory.graph import GraphMemory
+graph = GraphMemory(entity_collection, db)
+await graph.add_relationship("John", "Google", "WORKS_AT", agent_id="my_agent")
+related = await graph.graph_lookup("John", agent_id="my_agent", max_depth=2)
+# Uses $graphLookup with agent_id scoping and entity-boosted reranking
+```
+
+### Human-in-the-Loop (HITL)
+Pause agent execution for human approval on sensitive operations:
+```python
+from src.core.hitl import check_approval_needed, HITLConfig
+config = HITLConfig(sensitive_tools={"delete_memory", "clear_all"})
+if await check_approval_needed("delete_memory", config):
+    # Create approval request, wait for human decision
+    # API: GET /api/v1/hitl/pending/{agent_id}
+    # API: POST /api/v1/hitl/approve/{request_id}
+```
+
+### Time-Travel Debugging
+Replay any prior agent state via MongoDBSaver checkpoints:
+```
+GET /api/v1/time-travel/history/{thread_id}     # State history
+GET /api/v1/time-travel/snapshot/{thread_id}/{checkpoint_id}  # Specific state
+POST /api/v1/time-travel/replay                  # Replay from checkpoint
+```
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/health/ready` | GET | Readiness probe |
+| `/api/v1/evaluate` | POST | RAG evaluation with 4 metrics |
+| `/api/v1/query` | POST | Natural language to MQL |
+| `/api/v1/hitl/pending/{agent_id}` | GET | Pending approval requests |
+| `/api/v1/hitl/approve/{request_id}` | POST | Approve a request |
+| `/api/v1/hitl/reject/{request_id}` | POST | Reject a request |
+| `/api/v1/time-travel/history/{thread_id}` | GET | State history |
+| `/api/v1/time-travel/snapshot/{thread_id}/{id}` | GET | Specific checkpoint |
+
+## Project Structure
 
 ```
 agent_with_memory/
 ├── demo_memory_agent.py    # START HERE - Real-life demo
 ├── scripts/
-│   ├── setup_indexes.py    # Create vector + text indexes
-│   └── setup_test_indexes.py # Create indexes for test DBs
+│   ├── setup_indexes.py           # Vector + text + TTL indexes
+│   ├── setup_schema_validation.py # $jsonSchema validation
+│   └── setup_graph_indexes.py     # B-tree indexes for $graphLookup
 ├── src/
-│   ├── memory/             # 7-type memory system
+│   ├── memory/             # 7-type memory system + GraphRAG
 │   │   ├── manager.py      # Main orchestrator
 │   │   ├── episodic.py     # Conversation history
 │   │   ├── semantic.py     # Facts & knowledge
@@ -124,28 +206,27 @@ agent_with_memory/
 │   │   ├── working.py      # Session context
 │   │   ├── cache.py        # Fast retrieval
 │   │   ├── entity.py       # Entity extraction
-│   │   └── summary.py      # Context compression
+│   │   ├── summary.py      # Context compression
+│   │   └── graph.py        # GraphRAG with $graphLookup
+│   ├── observability/      # End-to-end tracing
+│   │   └── tracer.py       # Langfuse/LangSmith with graceful degradation
+│   ├── evaluation/         # RAG quality measurement
+│   │   └── evaluator.py    # LLM-as-judge (precision, recall, relevancy, faithfulness)
+│   ├── core/               # Agent core
+│   │   ├── agent.py        # Base agent
+│   │   ├── agent_langgraph.py # LangGraph agent with MongoDBSaver
+│   │   └── hitl.py         # Human-in-the-loop approval workflow
+│   ├── tools/              # Agent tools
+│   │   ├── nl_to_mql.py    # Natural language to MongoDB queries
+│   │   └── summary_tools.py # Summary expansion
 │   ├── context/            # Token management
-│   │   ├── engineer.py     # Auto-compression at 80%
-│   │   └── summarizer.py   # LLM summarization
-│   ├── storage/            # MongoDB integration
-│   │   ├── mongodb_client.py
-│   │   └── vector_index.py
-│   ├── embeddings/         # Voyage AI
-│   │   └── voyage_client.py
-│   └── retrieval/          # Advanced search system
-│       ├── vector_search.py    # Main search engine
-│       ├── config.py           # Search configuration
-│       ├── rrf.py              # Reciprocal Rank Fusion
-│       ├── tier_support.py     # Atlas tier detection
-│       ├── score_parser.py     # Score extraction
-│       └── filters/            # Filter builders
-│           ├── vector_search_filters.py  # MQL filters
-│           ├── atlas_search_filters.py   # Atlas Search filters
-│           └── lexical_prefilters.py     # MongoDB 8.2+ prefilters
-├── tests/
-│   ├── retrieval/          # 148 unit tests
-│   └── integration/        # E2E production tests
+│   ├── storage/            # MongoDB client (w:majority, retryWrites)
+│   ├── embeddings/         # Voyage AI (1024 dims)
+│   ├── retrieval/          # Hybrid search ($rankFusion)
+│   │   └── filters/        # Vector, Atlas Search, Lexical prefilters
+│   └── api/                # FastAPI REST API
+│       └── routes/         # evaluation, nl_query, hitl, time_travel
+├── tests/                  # 250+ unit tests
 └── CLAUDE.md               # Project documentation
 ```
 

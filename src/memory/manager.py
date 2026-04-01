@@ -10,11 +10,13 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from ..embeddings.voyage_client import get_embedding_service
+from ..observability.tracer import get_tracer
 from ..retrieval.vector_search import MultiCollectionSearch
 from .base import Memory, MemoryImportance, MemoryStore, MemoryType
 from .cache import SemanticCache
 from .entity import EntityMemory
 from .episodic import EpisodicMemory
+from .graph import GraphMemory
 from .procedural import ProceduralMemory
 from .semantic import SemanticMemory
 from .summary import SummaryMemory
@@ -68,6 +70,7 @@ class MemoryManager:
         self.cache = SemanticCache(db["cache_memories"])
         self.entity = EntityMemory(db["entity_memories"])
         self.summary = SummaryMemory(db["summary_memories"])
+        self.graph = GraphMemory(db, self.entity)
 
         # Memory type mapping
         self.stores: dict[MemoryType, MemoryStore] = {
@@ -169,6 +172,17 @@ class MemoryManager:
         self.stats["stores"] += 1
         logger.info(f"Stored {memory_type} memory: {memory_id}")
 
+        # Trace memory store operation (no-op when observability not configured)
+        try:
+            get_tracer().trace_memory_operation(
+                "store",
+                memory_type.value,
+                agent_id,
+                metadata={"importance": importance, "memory_id": memory_id},
+            )
+        except Exception:
+            logger.debug("Tracing failed, continuing", exc_info=True)
+
         return memory_id
 
     async def retrieve_memories(
@@ -250,6 +264,17 @@ class MemoryManager:
 
         self.stats["retrievals"] += 1
         logger.info(f"Retrieved {len(final_results)} memories for query: {query[:50]}...")
+
+        # Trace memory retrieve operation (no-op when observability not configured)
+        try:
+            get_tracer().trace_memory_operation(
+                "retrieve",
+                "multi",
+                agent_id or "unknown",
+                metadata={"query_prefix": query[:50], "results": len(final_results)},
+            )
+        except Exception:
+            logger.debug("Tracing failed, continuing", exc_info=True)
 
         return final_results
 
@@ -464,4 +489,29 @@ class MemoryManager:
         """
         return await self.summary.list_summary_references(
             agent_id=agent_id, thread_id=thread_id, limit=limit
+        )
+
+    async def graph_search(
+        self,
+        start_entity: str,
+        agent_id: str,
+        max_depth: int = 2,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Traverse entity relationships using GraphRAG $graphLookup.
+
+        Args:
+            start_entity: Entity name to start traversal from
+            agent_id: Agent ID for isolation
+            max_depth: Maximum relationship depth
+            limit: Maximum results
+
+        Returns:
+            List of connected entities with relationship paths
+        """
+        return await self.graph.graph_lookup(
+            start_entity=start_entity,
+            agent_id=agent_id,
+            max_depth=max_depth,
+            limit=limit,
         )

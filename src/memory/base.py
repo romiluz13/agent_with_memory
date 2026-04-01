@@ -5,13 +5,13 @@ Defines the contract for all memory types
 
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class MemoryType(str, Enum):
+class MemoryType(StrEnum):
     """Types of memory in the system."""
 
     EPISODIC = "episodic"  # Past conversations and events
@@ -23,7 +23,7 @@ class MemoryType(str, Enum):
     SUMMARY = "summary"  # Compressed context summaries
 
 
-class MemoryImportance(str, Enum):
+class MemoryImportance(StrEnum):
     """Importance levels for memories."""
 
     CRITICAL = "critical"  # Must never forget
