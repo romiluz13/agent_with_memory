@@ -4,6 +4,7 @@ Requires: MONGODB_URI, VOYAGE_API_KEY, GOOGLE_API_KEY environment variables.
 """
 
 import os
+
 import pytest
 import pytest_asyncio
 from motor.motor_asyncio import AsyncIOMotorClient

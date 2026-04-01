@@ -3,10 +3,11 @@ Integration tests for Entity Extraction with Gemini LLM.
 Tests LLM-powered NER for PERSON, ORGANIZATION, LOCATION, SYSTEM, CONCEPT.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.memory.entity import EntityMemory, ExtractionConfig, ENTITY_TYPES
+import pytest
+
+from src.memory.entity import ENTITY_TYPES, EntityMemory, ExtractionConfig
 
 
 class TestEntityTypes:

@@ -8,11 +8,11 @@ CRITICAL: These tests verify that one agent/user cannot see another's memories.
 Run with: python -m pytest tests/integration/test_multi_tenant_isolation.py -v -s
 """
 
-import os
 import asyncio
+import os
+
 import pytest
 import pytest_asyncio
-from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,6 +36,7 @@ class TestAgentIsolation:
     async def setup_db(self):
         """Set up real MongoDB connection."""
         from motor.motor_asyncio import AsyncIOMotorClient
+
         from src.memory.episodic import EpisodicMemory
 
         client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
@@ -164,6 +165,7 @@ class TestUserIsolation:
     async def setup_db(self):
         """Set up real MongoDB connection."""
         from motor.motor_asyncio import AsyncIOMotorClient
+
         from src.memory.episodic import EpisodicMemory
 
         client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
@@ -250,6 +252,7 @@ class TestMixedIsolation:
     async def setup_db(self):
         """Set up real MongoDB connection."""
         from motor.motor_asyncio import AsyncIOMotorClient
+
         from src.memory.episodic import EpisodicMemory
 
         client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
@@ -306,7 +309,7 @@ class TestMixedIsolation:
         )
 
         print(f"With filter: {len(results_filtered)} results")
-        agents_found_filtered = set(r.agent_id for r in results_filtered)
+        agents_found_filtered = {r.agent_id for r in results_filtered}
         print(f"Agents found: {agents_found_filtered}")
 
         # CRITICAL: Filtered results should ONLY contain agent-1
@@ -328,7 +331,7 @@ class TestMixedIsolation:
         )
 
         print(f"Without filter: {len(results_no_filter)} results")
-        agents_found = set(r.agent_id for r in results_no_filter)
+        agents_found = {r.agent_id for r in results_no_filter}
         print(f"Agents found: {agents_found}")
 
         # Verify: if filtered found results, unfiltered should find at least as many

@@ -3,12 +3,13 @@ MCP (Model Context Protocol) Toolkit
 Production-ready integration following langchain-mcp-adapters patterns.
 """
 
-import logging
-from typing import List, Optional, Dict, Any, Union
-from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_mcp_adapters.client import MultiServerMCPClient
 import asyncio
+import logging
+from typing import Any
+
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
@@ -17,70 +18,71 @@ logger = logging.getLogger(__name__)
 class MCPToolkit:
     """
     Production-ready MCP toolkit for loading and managing MCP tools.
-    
+
     Features:
     - Safe loading with error handling
     - Connection pooling and retry logic
     - Tool validation and filtering
     - Graceful degradation if MCP servers unavailable
     """
-    
-    def __init__(self, servers: Optional[List[str]] = None):
+
+    def __init__(self, servers: list[str] | None = None):
         """
         Initialize MCP toolkit.
-        
+
         Args:
             servers: List of MCP server commands (e.g., ["npx @modelcontextprotocol/server-filesystem"])
         """
         self.servers = servers or []
-        self.tools: List[BaseTool] = []
-        self.loaded_servers: Dict[str, bool] = {}
-        self._client: Optional[MultiServerMCPClient] = None
-        
+        self.tools: list[BaseTool] = []
+        self.loaded_servers: dict[str, bool] = {}
+        self._client: MultiServerMCPClient | None = None
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10)
     )
-    async def _load_single_server(self, server: str) -> List[BaseTool]:
+    async def _load_single_server(self, server: str) -> list[BaseTool]:
         """
         Load tools from a single MCP server with retry logic.
-        
+
         Args:
             server: MCP server command
-            
+
         Returns:
             List of loaded tools
         """
         try:
             logger.info(f"Loading MCP tools from: {server}")
-            
+
             # Parse the server command
             import shlex
+
             from mcp import StdioServerParameters
             from mcp.client.stdio import stdio_client
-            
+
             # Parse command into parts
             parts = shlex.split(server)
             command = parts[0]
             args = parts[1:] if len(parts) > 1 else []
-            
+
             # Create server parameters
             server_params = StdioServerParameters(
                 command=command,
                 args=args,
                 env=None
             )
-            
+
             # Create session and load tools
             async with stdio_client(server_params) as (read, write):
                 from mcp import ClientSession
                 session = ClientSession(read, write)
-                
+
                 await session.initialize()
-                
+
                 # Load tools using the session
                 tools = await load_mcp_tools(session)
-                
+
                 if tools:
                     logger.info(f"Successfully loaded {len(tools)} tools from {server}")
                     self.loaded_servers[server] = True
@@ -89,33 +91,33 @@ class MCPToolkit:
                     logger.warning(f"No tools loaded from {server}")
                     self.loaded_servers[server] = False
                     return []
-                
+
         except Exception as e:
             logger.error(f"Failed to load MCP tools from {server}: {e}")
             self.loaded_servers[server] = False
             # Don't crash - graceful degradation
             return []
-    
-    async def load_tools(self, servers: Optional[List[str]] = None) -> List[BaseTool]:
+
+    async def load_tools(self, servers: list[str] | None = None) -> list[BaseTool]:
         """
         Load tools from all configured MCP servers.
-        
+
         Args:
             servers: Optional list of servers to load (uses self.servers if not provided)
-            
+
         Returns:
             Combined list of all loaded tools
         """
         servers_to_load = servers or self.servers
-        
+
         if not servers_to_load:
             logger.warning("No MCP servers configured")
             return []
-        
+
         # Load tools from all servers in parallel
         tasks = [self._load_single_server(server) for server in servers_to_load]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Combine all successfully loaded tools
         all_tools = []
         for result in results:
@@ -123,19 +125,19 @@ class MCPToolkit:
                 all_tools.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error loading tools: {result}")
-        
+
         self.tools = all_tools
         logger.info(f"Total MCP tools loaded: {len(all_tools)}")
-        
+
         return all_tools
-    
-    async def load_tools_with_client(self, servers: List[Dict[str, Any]]) -> List[BaseTool]:
+
+    async def load_tools_with_client(self, servers: list[dict[str, Any]]) -> list[BaseTool]:
         """
         Load tools using MultiServerMCPClient for advanced configurations.
-        
+
         Args:
             servers: List of server configurations with connection details
-            
+
         Returns:
             List of loaded tools
         """
@@ -143,43 +145,43 @@ class MCPToolkit:
             # Initialize client if not exists
             if not self._client:
                 self._client = MultiServerMCPClient(servers)
-            
+
             # Get all available tools
             tools = await self._client.list_tools()
-            
+
             logger.info(f"Loaded {len(tools)} tools via MultiServerMCPClient")
             self.tools = tools
             return tools
-            
+
         except Exception as e:
             logger.error(f"Failed to load tools with client: {e}")
             return []
-    
-    def get_tools(self) -> List[BaseTool]:
+
+    def get_tools(self) -> list[BaseTool]:
         """
         Get all loaded tools.
-        
+
         Returns:
             List of loaded MCP tools
         """
         return self.tools
-    
-    def get_tool_names(self) -> List[str]:
+
+    def get_tool_names(self) -> list[str]:
         """
         Get names of all loaded tools.
-        
+
         Returns:
             List of tool names
         """
         return [tool.name for tool in self.tools]
-    
-    def get_tool_by_name(self, name: str) -> Optional[BaseTool]:
+
+    def get_tool_by_name(self, name: str) -> BaseTool | None:
         """
         Get a specific tool by name.
-        
+
         Args:
             name: Tool name
-            
+
         Returns:
             Tool if found, None otherwise
         """
@@ -187,22 +189,22 @@ class MCPToolkit:
             if tool.name == name:
                 return tool
         return None
-    
-    def filter_tools(self, pattern: str) -> List[BaseTool]:
+
+    def filter_tools(self, pattern: str) -> list[BaseTool]:
         """
         Filter tools by name pattern.
-        
+
         Args:
             pattern: Pattern to match in tool names
-            
+
         Returns:
             Filtered list of tools
         """
         return [
-            tool for tool in self.tools 
+            tool for tool in self.tools
             if pattern.lower() in tool.name.lower()
         ]
-    
+
     async def cleanup(self):
         """Clean up resources."""
         if self._client:
@@ -211,14 +213,14 @@ class MCPToolkit:
                 pass
             except Exception as e:
                 logger.error(f"Error during cleanup: {e}")
-        
+
         self.tools.clear()
         self.loaded_servers.clear()
-    
-    def get_status(self) -> Dict[str, Any]:
+
+    def get_status(self) -> dict[str, Any]:
         """
         Get toolkit status.
-        
+
         Returns:
             Status dictionary
         """
@@ -231,27 +233,27 @@ class MCPToolkit:
 
 
 # Convenience functions for quick usage
-async def load_mcp_tools_safe(servers: Union[str, List[str]]) -> List[BaseTool]:
+async def load_mcp_tools_safe(servers: str | list[str]) -> list[BaseTool]:
     """
     Safely load MCP tools with error handling.
-    
+
     Args:
         servers: Single server or list of servers
-        
+
     Returns:
         List of loaded tools (empty list if failed)
     """
     if isinstance(servers, str):
         servers = [servers]
-    
+
     toolkit = MCPToolkit(servers)
     return await toolkit.load_tools()
 
 
-async def get_common_mcp_tools() -> List[BaseTool]:
+async def get_common_mcp_tools() -> list[BaseTool]:
     """
     Load commonly used MCP tools.
-    
+
     Returns:
         List of common tools
     """
@@ -260,5 +262,5 @@ async def get_common_mcp_tools() -> List[BaseTool]:
         "npx @modelcontextprotocol/server-github",
         "npx @modelcontextprotocol/server-brave-search"
     ]
-    
+
     return await load_mcp_tools_safe(common_servers)

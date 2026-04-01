@@ -3,10 +3,11 @@ Integration tests for Context Compression at 80% threshold.
 Oracle innovation: Auto-compress when tokens exceed 80% of model limit.
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from src.context.engineer import ContextEngineer, MODEL_TOKEN_LIMITS
+import pytest
+
+from src.context.engineer import MODEL_TOKEN_LIMITS, ContextEngineer
 from src.context.summarizer import ContextSummarizer, SummarizationConfig
 
 
@@ -96,7 +97,7 @@ class TestShouldCompress:
 
     def test_exact_threshold(self):
         """Test behavior at exactly 80%."""
-        engineer = ContextEngineer(threshold=0.80)
+        ContextEngineer(threshold=0.80)
         # Create context that's exactly at threshold
         # This tests edge case handling
         pass  # Implementation specific

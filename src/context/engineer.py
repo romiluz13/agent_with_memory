@@ -6,8 +6,8 @@ Based on Oracle Memory Engineering pattern.
 
 import logging
 import uuid
-from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +67,12 @@ class ContextEngineer:
         """
         self.threshold = threshold
         self.default_model = default_model
-        self._summaries_created: List[Dict[str, Any]] = []
+        self._summaries_created: list[dict[str, Any]] = []
 
     def calculate_usage(
         self,
         context: str,
-        model: Optional[str] = None
+        model: str | None = None
     ) -> ContextUsage:
         """
         Calculate context window usage.
@@ -100,8 +100,8 @@ class ContextEngineer:
     def should_compress(
         self,
         context: str,
-        model: Optional[str] = None,
-        threshold: Optional[float] = None
+        model: str | None = None,
+        threshold: float | None = None
     ) -> bool:
         """
         Check if context should be compressed.
@@ -124,8 +124,8 @@ class ContextEngineer:
         memory_manager,
         llm,
         agent_id: str,
-        thread_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        thread_id: str | None = None
+    ) -> dict[str, Any]:
         """
         Summarize context and store in summary memory.
 
@@ -191,7 +191,7 @@ class ContextEngineer:
 
     def build_context_with_references(
         self,
-        summaries: List[Dict[str, str]],
+        summaries: list[dict[str, str]],
         current_context: str
     ) -> str:
         """
@@ -213,7 +213,7 @@ class ContextEngineer:
 
         return f"{references_section}\n{current_context}"
 
-    def get_summaries_created(self) -> List[Dict[str, Any]]:
+    def get_summaries_created(self) -> list[dict[str, Any]]:
         """Get list of summaries created in this session."""
         return self._summaries_created.copy()
 

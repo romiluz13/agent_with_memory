@@ -1,13 +1,12 @@
 """Tests for Summary Tools module."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from src.tools.summary_tools import (
     create_expand_summary_tool,
-    create_summarize_tool,
     create_summarize_conversation_tool,
-    create_summary_tools
+    create_summarize_tool,
+    create_summary_tools,
 )
 
 

@@ -5,8 +5,8 @@ Based on Oracle Memory Engineering pattern.
 """
 
 import logging
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ Summary: {summary}
 
 Label:"""
 
-    def __init__(self, config: Optional[SummarizationConfig] = None):
+    def __init__(self, config: SummarizationConfig | None = None):
         """Initialize summarizer with config."""
         self.config = config or SummarizationConfig()
 
@@ -50,8 +50,8 @@ Label:"""
         self,
         content: str,
         llm,
-        max_input_length: Optional[int] = None
-    ) -> Dict[str, Any]:
+        max_input_length: int | None = None
+    ) -> dict[str, Any]:
         """
         Summarize content and generate a label.
 
@@ -94,7 +94,7 @@ Label:"""
         self,
         messages: list,
         llm
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Summarize a conversation (list of messages).
 
@@ -150,7 +150,7 @@ async def summarize_context(
     memory_manager,
     llm,
     agent_id: str = "system"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Convenience function to summarize and store.
 

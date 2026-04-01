@@ -1,11 +1,10 @@
 """Tests for Entity Memory module."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 
-from src.memory.entity import EntityMemory, ENTITY_TYPES, ExtractionConfig
-from src.memory.base import Memory, MemoryType
+import pytest
+
+from src.memory.entity import ENTITY_TYPES, EntityMemory, ExtractionConfig
 
 
 class TestEntityTypes:

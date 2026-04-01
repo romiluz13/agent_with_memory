@@ -18,11 +18,12 @@ Simulates a real conversation that:
 Run with: python -m pytest tests/integration/test_real_e2e_flow.py -v -s
 """
 
-import os
 import asyncio
+import os
+from datetime import datetime
+
 import pytest
 import pytest_asyncio
-from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -581,11 +582,12 @@ class TestRealE2EFlow:
     async def services(self):
         """Set up real MongoDB and services."""
         from motor.motor_asyncio import AsyncIOMotorClient
-        from src.memory.episodic import EpisodicMemory
-        from src.memory.summary import SummaryMemory
-        from src.memory.entity import EntityMemory
+
         from src.context.engineer import ContextEngineer
         from src.context.summarizer import ContextSummarizer
+        from src.memory.entity import EntityMemory
+        from src.memory.episodic import EpisodicMemory
+        from src.memory.summary import SummaryMemory
 
         # Real MongoDB connection
         client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
@@ -668,7 +670,7 @@ class TestRealE2EFlow:
             stored_ids.append(memory_id)
 
             print(f"  ✓ Stored with ID: {memory_id}")
-            print(f"  ✓ Embedding generated: 1024 dimensions (Voyage AI)")
+            print("  ✓ Embedding generated: 1024 dimensions (Voyage AI)")
 
         # Verify in database
         count = await services["db"].episodic_memories.count_documents({
@@ -721,7 +723,7 @@ class TestRealE2EFlow:
             for msg in REALISTIC_CONVERSATION
         ])
 
-        print(f"\nConversation stats:")
+        print("\nConversation stats:")
         print(f"  Messages: {len(REALISTIC_CONVERSATION)}")
         print(f"  Total characters: {len(context):,}")
 
@@ -750,12 +752,13 @@ class TestRealE2EFlow:
         """
         episodic = services["episodic"]
         summary_store = services["summary"]
-        summarizer = services["summarizer"]
+        services["summarizer"]
         agent_id = services["agent_id"]
         thread_id = services["thread_id"]
 
-        from src.memory.base import Memory, MemoryType
         import google.generativeai as genai
+
+        from src.memory.base import Memory, MemoryType
 
         print("\n" + "="*60)
         print("STEP 3: Triggering compression with REAL Gemini LLM")
@@ -872,8 +875,9 @@ Provide a structured summary with:
         agent_id = services["agent_id"]
         thread_id = services["thread_id"]
 
-        from src.memory.base import Memory, MemoryType
         import google.generativeai as genai
+
+        from src.memory.base import Memory, MemoryType
 
         print("\n" + "="*60)
         print("STEP 4: JIT expansion retrieves original content")
@@ -950,6 +954,7 @@ Provide a structured summary with:
         agent_id = services["agent_id"]
 
         import google.generativeai as genai
+
         from src.memory.base import Memory, MemoryType
 
         print("\n" + "="*60)
@@ -959,7 +964,7 @@ Provide a structured summary with:
         # Sample text from conversation
         sample_text = REALISTIC_CONVERSATION[3]["content"]  # The Axios code example
 
-        print(f"\nExtracting entities from assistant response...")
+        print("\nExtracting entities from assistant response...")
         print(f"Text length: {len(sample_text)} chars")
 
         # Configure Gemini

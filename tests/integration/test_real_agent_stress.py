@@ -15,15 +15,16 @@ This is NOT a fake test. This simulates:
 Run with: python -m pytest tests/integration/test_real_agent_stress.py -v -s
 """
 
-import os
 import asyncio
+import json
+import os
+import random
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
 import pytest
 import pytest_asyncio
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-import json
-import random
 
 # Skip if no real credentials
 SKIP_REAL_TEST = not all([
@@ -45,7 +46,7 @@ class ConversationTurn:
     user_input: str
     agent_response: str
     memories_retrieved: int
-    tools_called: List[str]
+    tools_called: list[str]
     context_usage_percent: float
     timestamp: str
 
@@ -70,16 +71,16 @@ class RealAgentWithMemory:
         self.agent_id = agent_id
         self.thread_id = thread_id
         self.context_threshold = context_threshold
-        self.conversation_history: List[Dict] = []
+        self.conversation_history: list[dict] = []
         self.total_context_chars = 0
         self.compression_triggered = False
         self.summaries_created = 0
 
         # Import AWM 2.0 components
+        from src.context.engineer import ContextEngineer
+        from src.memory.entity import EntityMemory
         from src.memory.episodic import EpisodicMemory
         from src.memory.summary import SummaryMemory
-        from src.memory.entity import EntityMemory
-        from src.context.engineer import ContextEngineer
 
         # Initialize memory stores
         self.episodic = EpisodicMemory(db.episodic_memories)
@@ -101,14 +102,14 @@ class RealAgentWithMemory:
         }
 
         # User preferences (learned over time)
-        self.learned_preferences: Dict[str, Any] = {}
+        self.learned_preferences: dict[str, Any] = {}
 
     async def _tool_calculate(self, expression: str) -> str:
         """Calculate a math expression."""
         try:
             result = eval(expression)  # In production, use a safe eval
             return f"Result: {result}"
-        except:
+        except Exception:
             return "Error: Could not calculate"
 
     async def _tool_search_memory(self, query: str) -> str:
@@ -213,7 +214,7 @@ Conversation:
 
         return summary_id
 
-    async def _retrieve_relevant_memories(self, user_input: str) -> List[str]:
+    async def _retrieve_relevant_memories(self, user_input: str) -> list[str]:
         """Retrieve relevant memories before responding."""
         memories = await self.episodic.retrieve(user_input, limit=3, threshold=0.6)
         return [m.content for m in memories]
@@ -243,7 +244,7 @@ Text: "{text[:500]}"'''
                         metadata={"entity_name": entity["name"], "entity_type": entity["type"]}
                     )
                     await self.entity.store(memory)
-        except:
+        except Exception:
             pass  # Entity extraction is optional
 
     async def chat(self, user_input: str) -> ConversationTurn:
@@ -284,7 +285,7 @@ Text: "{text[:500]}"'''
         # Step 3: Build prompt with context
         context_parts = []
         if relevant_memories:
-            context_parts.append(f"Relevant memories:\n" + "\n".join(relevant_memories))
+            context_parts.append("Relevant memories:\n" + "\n".join(relevant_memories))
         if self.learned_preferences:
             context_parts.append(f"User preferences: {json.dumps(self.learned_preferences)}")
         if tool_result:
@@ -353,7 +354,7 @@ Respond naturally. If you learned something new about the user, acknowledge it."
             timestamp=datetime.now().isoformat()
         )
 
-    async def end_session(self) -> Dict[str, Any]:
+    async def end_session(self) -> dict[str, Any]:
         """End session and return stats."""
         return {
             "total_turns": len(self.conversation_history) // 2,

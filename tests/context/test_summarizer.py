@@ -1,12 +1,10 @@
 """Tests for Context Summarizer module."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from src.context.summarizer import (
-    ContextSummarizer,
-    SummarizationConfig
-)
+import pytest
+
+from src.context.summarizer import ContextSummarizer, SummarizationConfig
 
 
 class TestSummarizationConfig:
@@ -84,7 +82,7 @@ class TestContextSummarizer:
         long_content = "x" * 5000
         result = await self.summarizer.summarize(long_content, mock_llm)
 
-        assert result["truncated"] == True
+        assert result["truncated"]
         assert result["original_length"] == 5000
 
     @pytest.mark.asyncio

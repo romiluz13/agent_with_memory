@@ -1,11 +1,10 @@
 """Tests for Summary Memory module."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+
+import pytest
 
 from src.memory.summary import SummaryMemory
-from src.memory.base import Memory, MemoryType
 
 
 class TestSummaryMemoryInit:
@@ -122,32 +121,32 @@ class TestSummaryMemoryMethods:
     def test_has_store_method(self, summary_memory):
         """Test SummaryMemory has store method."""
         assert hasattr(summary_memory, 'store')
-        assert callable(getattr(summary_memory, 'store'))
+        assert callable(summary_memory.store)
 
     def test_has_retrieve_method(self, summary_memory):
         """Test SummaryMemory has retrieve method."""
         assert hasattr(summary_memory, 'retrieve')
-        assert callable(getattr(summary_memory, 'retrieve'))
+        assert callable(summary_memory.retrieve)
 
     def test_has_store_summary_method(self, summary_memory):
         """Test SummaryMemory has store_summary method."""
         assert hasattr(summary_memory, 'store_summary')
-        assert callable(getattr(summary_memory, 'store_summary'))
+        assert callable(summary_memory.store_summary)
 
     def test_has_expand_summary_method(self, summary_memory):
         """Test SummaryMemory has expand_summary method."""
         assert hasattr(summary_memory, 'expand_summary')
-        assert callable(getattr(summary_memory, 'expand_summary'))
+        assert callable(summary_memory.expand_summary)
 
     def test_has_retrieve_by_summary_id_method(self, summary_memory):
         """Test SummaryMemory has retrieve_by_summary_id method."""
         assert hasattr(summary_memory, 'retrieve_by_summary_id')
-        assert callable(getattr(summary_memory, 'retrieve_by_summary_id'))
+        assert callable(summary_memory.retrieve_by_summary_id)
 
     def test_has_list_summary_references_method(self, summary_memory):
         """Test SummaryMemory has list_summary_references method."""
         assert hasattr(summary_memory, 'list_summary_references')
-        assert callable(getattr(summary_memory, 'list_summary_references'))
+        assert callable(summary_memory.list_summary_references)
 
 
 class TestCompressionMetadata:

@@ -3,13 +3,13 @@ Integration tests for full memory cycle across all 7 memory types.
 Tests: Store -> Retrieve -> Update -> Delete for each type.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from datetime import datetime
-from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.memory.base import Memory, MemoryType
-from src.memory.episodic import EpisodicMemory
 from src.memory.entity import EntityMemory
+from src.memory.episodic import EpisodicMemory
 from src.memory.summary import SummaryMemory
 
 
@@ -275,7 +275,7 @@ class TestMarkAsSummarizedPattern:
             await episodic_store.store(memory)
 
         # Mark as summarized
-        count = await episodic_store.mark_as_summarized(
+        await episodic_store.mark_as_summarized(
             agent_id=test_agent_id,
             thread_id=test_thread_id,
             summary_id="sum-001"

@@ -45,7 +45,7 @@ class TestSearchEndpointIsolation:
                 # Check for agent_id assignment in class body
                 field_names = []
                 for item in node.body:
-                    if isinstance(item, (ast.AnnAssign, ast.Assign)):
+                    if isinstance(item, ast.AnnAssign | ast.Assign):
                         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
                             field_names.append(item.target.id)
                 assert "agent_id" in field_names, "SearchMemoryRequest missing agent_id field"

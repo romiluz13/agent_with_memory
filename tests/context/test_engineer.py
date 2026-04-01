@@ -1,7 +1,6 @@
 """Tests for Context Engineer module."""
 
-import pytest
-from src.context.engineer import ContextEngineer, ContextUsage, MODEL_TOKEN_LIMITS
+from src.context.engineer import MODEL_TOKEN_LIMITS, ContextEngineer, ContextUsage
 
 
 class TestContextEngineer:
@@ -102,6 +101,6 @@ class TestModelTokenLimits:
 
     def test_all_limits_positive(self):
         """Test all token limits are positive integers."""
-        for model, limit in MODEL_TOKEN_LIMITS.items():
+        for _model, limit in MODEL_TOKEN_LIMITS.items():
             assert isinstance(limit, int)
             assert limit > 0
