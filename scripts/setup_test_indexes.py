@@ -5,11 +5,13 @@ Run with: python scripts/setup_test_indexes.py
 """
 
 import asyncio
+import os
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Direct credentials for testing
-MONGODB_URI = "mongodb+srv://rom:05101994@cluster0.466n8j.mongodb.net/?appName=Cluster0"
+MONGODB_URI = os.getenv("MONGODB_URI")
+if not MONGODB_URI:
+    raise ValueError("MONGODB_URI environment variable required")
 
 MEMORY_COLLECTIONS = [
     "episodic_memories",

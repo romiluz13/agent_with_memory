@@ -4,14 +4,15 @@ Stores past conversations, events, and experiences
 """
 
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import UTC, datetime
+from typing import Any
+
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from .base import Memory, MemoryStore, MemoryType
-from ..retrieval.vector_search import VectorSearchEngine, SearchResult
 from ..embeddings.voyage_client import get_embedding_service
+from ..retrieval.vector_search import VectorSearchEngine
+from .base import Memory, MemoryStore, MemoryType
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,13 @@ class EpisodicMemory(MemoryStore):
     Episodic memory for storing conversations and events.
     Remembers what happened, when, and with whom.
     """
-    
+
     def __init__(self, collection: AsyncIOMotorCollection):
         """Initialize with MongoDB collection."""
         self.collection = collection
         self.search_engine = VectorSearchEngine(collection)
         self.embedding_service = get_embedding_service()
-    
+
     async def store(self, memory: Memory) -> str:
         """Store an episodic memory."""
         try:
@@ -35,38 +36,41 @@ class EpisodicMemory(MemoryStore):
             memory.memory_type = MemoryType.EPISODIC
 
             # Add temporal metadata
-            memory.metadata["timestamp"] = datetime.utcnow().isoformat()
-            memory.metadata["day_of_week"] = datetime.utcnow().strftime("%A")
+            memory.metadata["timestamp"] = datetime.now(UTC).isoformat()
+            memory.metadata["day_of_week"] = datetime.now(UTC).strftime("%A")
 
-            # Generate embedding for vector search
-            embedding_result = await self.embedding_service.generate_embedding(
-                memory.content, input_type="document"
-            )
+            # Generate embedding only if not already present
+            # mongodb-search-and-ai: "Generate embeddings once at orchestration layer"
+            if not memory.embedding:
+                embedding_result = await self.embedding_service.generate_embedding(
+                    memory.content, input_type="document"
+                )
+                memory.embedding = embedding_result.embedding
 
             # Convert to dict for MongoDB
             memory_dict = memory.model_dump(exclude={"id"})
             memory_dict["_id"] = ObjectId()
-            memory_dict["embedding"] = embedding_result.embedding  # Add embedding for vector search
+            memory_dict["embedding"] = memory.embedding
 
             # Insert into collection
             result = await self.collection.insert_one(memory_dict)
-            
+
             logger.debug(f"Stored episodic memory: {result.inserted_id}")
             return str(result.inserted_id)
-            
+
         except Exception as e:
             logger.error(f"Failed to store episodic memory: {e}")
             raise
-    
+
     async def retrieve(
         self,
         query: str,
         limit: int = 10,
         threshold: float = 0.7,
-        agent_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        search_mode: str = "hybrid"
-    ) -> List[Memory]:
+        agent_id: str | None = None,
+        user_id: str | None = None,
+        search_mode: str = "hybrid",
+    ) -> list[Memory]:
         """
         Retrieve episodic memories by similarity.
 
@@ -105,14 +109,14 @@ class EpisodicMemory(MemoryStore):
                     query_text=query,
                     query_embedding=embedding_result.embedding,
                     limit=limit,
-                    filter_query=filter_query if filter_query else None
+                    filter_query=filter_query if filter_query else None,
                 )
             else:
                 # Vector-only search (semantic mode or fallback)
                 results = await self.search_engine.search(
                     query_embedding=embedding_result.embedding,
                     limit=limit,
-                    filter_query=filter_query if filter_query else None
+                    filter_query=filter_query if filter_query else None,
                 )
 
             # Convert results to Memory objects
@@ -134,8 +138,8 @@ class EpisodicMemory(MemoryStore):
         except Exception as e:
             logger.error(f"Failed to retrieve episodic memories: {e}")
             return []
-    
-    async def get_by_id(self, memory_id: str) -> Optional[Memory]:
+
+    async def get_by_id(self, memory_id: str) -> Memory | None:
         """Get episodic memory by ID."""
         try:
             doc = await self.collection.find_one({"_id": ObjectId(memory_id)})
@@ -146,20 +150,19 @@ class EpisodicMemory(MemoryStore):
         except Exception as e:
             logger.error(f"Failed to get episodic memory {memory_id}: {e}")
             return None
-    
-    async def update(self, memory_id: str, updates: Dict[str, Any]) -> bool:
+
+    async def update(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Update an episodic memory."""
         try:
-            updates["updated_at"] = datetime.utcnow()
+            updates["updated_at"] = datetime.now(UTC)
             result = await self.collection.update_one(
-                {"_id": ObjectId(memory_id)},
-                {"$set": updates}
+                {"_id": ObjectId(memory_id)}, {"$set": updates}
             )
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update episodic memory {memory_id}: {e}")
             return False
-    
+
     async def delete(self, memory_id: str) -> bool:
         """Delete an episodic memory."""
         try:
@@ -168,7 +171,7 @@ class EpisodicMemory(MemoryStore):
         except Exception as e:
             logger.error(f"Failed to delete episodic memory {memory_id}: {e}")
             return False
-    
+
     async def clear_all(self, confirm: bool = False) -> int:
         """Clear all episodic memories."""
         if not confirm:
@@ -181,12 +184,7 @@ class EpisodicMemory(MemoryStore):
             logger.error(f"Failed to clear episodic memories: {e}")
             return 0
 
-    async def mark_as_summarized(
-        self,
-        agent_id: str,
-        thread_id: str,
-        summary_id: str
-    ) -> int:
+    async def mark_as_summarized(self, agent_id: str, thread_id: str, summary_id: str) -> int:
         """
         Mark messages as summarized without deleting them.
         This preserves the full audit trail while excluding them from normal retrieval.
@@ -207,16 +205,13 @@ class EpisodicMemory(MemoryStore):
                     "memory_type": "episodic",
                     "agent_id": agent_id,
                     "metadata.thread_id": thread_id,
-                    "summary_id": None  # Only mark unsummarized messages
+                    "summary_id": None,  # Only mark unsummarized messages
                 },
-                {
-                    "$set": {
-                        "summary_id": summary_id,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
+                {"$set": {"summary_id": summary_id, "updated_at": datetime.now(UTC)}},
             )
-            logger.info(f"Marked {result.modified_count} messages as summarized (summary_id: {summary_id})")
+            logger.info(
+                f"Marked {result.modified_count} messages as summarized (summary_id: {summary_id})"
+            )
             return result.modified_count
         except Exception as e:
             logger.error(f"Failed to mark messages as summarized: {e}")
@@ -224,13 +219,13 @@ class EpisodicMemory(MemoryStore):
 
     async def list_memories(
         self,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: dict[str, Any] | None = None,
         limit: int = 100,
         offset: int = 0,
         include_summarized: bool = False,
-        agent_id: Optional[str] = None,
-        user_id: Optional[str] = None
-    ) -> List[Memory]:
+        agent_id: str | None = None,
+        user_id: str | None = None,
+    ) -> list[Memory]:
         """
         List episodic memories with filters.
 
@@ -273,12 +268,8 @@ class EpisodicMemory(MemoryStore):
             return []
 
     async def get_conversation_history(
-        self,
-        agent_id: str,
-        thread_id: str,
-        limit: int = 50,
-        include_summarized: bool = False
-    ) -> List[Memory]:
+        self, agent_id: str, thread_id: str, limit: int = 50, include_summarized: bool = False
+    ) -> list[Memory]:
         """
         Get conversation history for a thread.
 
@@ -291,14 +282,9 @@ class EpisodicMemory(MemoryStore):
         Returns:
             List of conversation memories (chronological order)
         """
-        filters = {
-            "agent_id": agent_id,
-            "metadata.thread_id": thread_id
-        }
+        filters = {"agent_id": agent_id, "metadata.thread_id": thread_id}
         memories = await self.list_memories(
-            filters=filters,
-            limit=limit,
-            include_summarized=include_summarized
+            filters=filters, limit=limit, include_summarized=include_summarized
         )
         # Return in chronological order
         return sorted(memories, key=lambda m: m.created_at)

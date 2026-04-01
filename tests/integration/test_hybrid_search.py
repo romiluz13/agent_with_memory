@@ -4,10 +4,7 @@ AWM 2.0 unique feature: Vector + Text search with weighted scoring.
 Oracle only has semantic search - we have hybrid.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-
-from src.retrieval.vector_search import VectorSearchEngine, SearchResult, MultiCollectionSearch
+from src.retrieval.vector_search import MultiCollectionSearch, SearchResult, VectorSearchEngine
 
 
 class TestHybridSearchExists:
@@ -15,15 +12,15 @@ class TestHybridSearchExists:
 
     def test_hybrid_search_method_exists(self):
         """Test VectorSearchEngine has hybrid_search method."""
-        assert hasattr(VectorSearchEngine, 'hybrid_search')
+        assert hasattr(VectorSearchEngine, "hybrid_search")
 
     def test_search_method_exists(self):
         """Test VectorSearchEngine has basic search method."""
-        assert hasattr(VectorSearchEngine, 'search')
+        assert hasattr(VectorSearchEngine, "search")
 
     def test_search_with_reranking_exists(self):
         """Test VectorSearchEngine has search_with_reranking method."""
-        assert hasattr(VectorSearchEngine, 'search_with_reranking')
+        assert hasattr(VectorSearchEngine, "search_with_reranking")
 
 
 class TestSearchResultModel:
@@ -32,10 +29,7 @@ class TestSearchResultModel:
     def test_search_result_creation(self):
         """Test SearchResult can be created."""
         result = SearchResult(
-            id="test-id",
-            content="Test content",
-            score=0.95,
-            metadata={"key": "value"}
+            id="test-id", content="Test content", score=0.95, metadata={"key": "value"}
         )
         assert result.id == "test-id"
         assert result.content == "Test content"
@@ -97,24 +91,27 @@ class TestHybridSearchSignature:
     def test_hybrid_search_accepts_query_embedding(self):
         """Test hybrid_search accepts query_embedding parameter."""
         import inspect
-        sig = inspect.signature(VectorSearchEngine.hybrid_search)
-        params = list(sig.parameters.keys())
-        assert 'query_embedding' in params
 
-    def test_hybrid_search_accepts_text_query(self):
-        """Test hybrid_search accepts text_query parameter."""
-        import inspect
         sig = inspect.signature(VectorSearchEngine.hybrid_search)
         params = list(sig.parameters.keys())
-        assert 'text_query' in params
+        assert "query_embedding" in params
+
+    def test_hybrid_search_accepts_query_text(self):
+        """Test hybrid_search accepts query_text parameter."""
+        import inspect
+
+        sig = inspect.signature(VectorSearchEngine.hybrid_search)
+        params = list(sig.parameters.keys())
+        assert "query_text" in params
 
     def test_hybrid_search_accepts_weights(self):
         """Test hybrid_search accepts weight parameters."""
         import inspect
+
         sig = inspect.signature(VectorSearchEngine.hybrid_search)
         params = list(sig.parameters.keys())
-        assert 'vector_weight' in params
-        assert 'text_weight' in params
+        assert "vector_weight" in params
+        assert "text_weight" in params
 
 
 class TestVectorSearchPipeline:
@@ -125,19 +122,23 @@ class TestVectorSearchPipeline:
         # This is what the pipeline should look like
         expected_stages = ["$vectorSearch", "$project"]
         pipeline = [
-            {"$vectorSearch": {
-                "index": "vector_index",
-                "path": "embedding",
-                "queryVector": [0.1] * 1024,
-                "numCandidates": 100,
-                "limit": 10
-            }},
-            {"$project": {
-                "_id": 1,
-                "content": 1,
-                "metadata": 1,
-                "score": {"$meta": "vectorSearchScore"}
-            }}
+            {
+                "$vectorSearch": {
+                    "index": "vector_index",
+                    "path": "embedding",
+                    "queryVector": [0.1] * 1024,
+                    "numCandidates": 100,
+                    "limit": 10,
+                }
+            },
+            {
+                "$project": {
+                    "_id": 1,
+                    "content": 1,
+                    "metadata": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }
+            },
         ]
 
         for stage, expected in zip(pipeline, expected_stages):
@@ -159,11 +160,11 @@ class TestMultiCollectionSearch:
 
     def test_search_all_method_exists(self):
         """Test search_all method exists on MultiCollectionSearch."""
-        assert hasattr(MultiCollectionSearch, 'search_all')
+        assert hasattr(MultiCollectionSearch, "search_all")
 
     def test_search_memories_by_type_exists(self):
         """Test search_memories_by_type method exists on VectorSearchEngine."""
-        assert hasattr(VectorSearchEngine, 'search_memories_by_type')
+        assert hasattr(VectorSearchEngine, "search_memories_by_type")
 
     def test_memory_types_searchable(self):
         """Test all 7 memory types have collections that can be searched."""
@@ -174,6 +175,6 @@ class TestMultiCollectionSearch:
             "working_memories",
             "cache_memories",
             "entity_memories",
-            "summary_memories"
+            "summary_memories",
         ]
         assert len(collections) == 7

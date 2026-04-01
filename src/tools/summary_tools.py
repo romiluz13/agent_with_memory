@@ -5,18 +5,19 @@ Based on Oracle Memory Engineering pattern.
 """
 
 import logging
-from typing import Optional
+
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
 
-def create_expand_summary_tool(memory_manager):
+def create_expand_summary_tool(memory_manager, agent_id: str | None = None):
     """
     Create expand_summary tool with bound memory_manager.
 
     Args:
         memory_manager: MemoryManager instance with summary store
+        agent_id: Agent ID for multi-tenant isolation
 
     Returns:
         LangChain tool function
@@ -37,7 +38,9 @@ def create_expand_summary_tool(memory_manager):
             Full original content that was summarized, or error message
         """
         try:
-            full_content = await memory_manager.summary.expand_summary(summary_id)
+            full_content = await memory_manager.summary.expand_summary(
+                summary_id, agent_id=agent_id
+            )
             if full_content:
                 return f"## Expanded Summary [{summary_id}]\n\n{full_content}"
             return f"Summary {summary_id} not found."
@@ -62,10 +65,7 @@ def create_summarize_tool(memory_manager, llm, agent_id: str):
     """
 
     @tool
-    async def summarize_and_store(
-        text: str,
-        thread_id: Optional[str] = None
-    ) -> str:
+    async def summarize_and_store(text: str, thread_id: str | None = None) -> str:
         """
         Summarize long text and store it for later retrieval.
 
@@ -88,10 +88,7 @@ def create_summarize_tool(memory_manager, llm, agent_id: str):
             from ..context.summarizer import summarize_context
 
             result = await summarize_context(
-                content=text,
-                memory_manager=memory_manager,
-                llm=llm,
-                agent_id=agent_id
+                content=text, memory_manager=memory_manager, llm=llm, agent_id=agent_id
             )
 
             return f"[Summary ID: {result['id']}] {result['description']}"
@@ -140,22 +137,17 @@ def create_summarize_conversation_tool(memory_manager, llm, agent_id: str):
 
             # Get unsummarized messages
             messages = await memory_manager.episodic.list_memories(
-                filters={
-                    "agent_id": agent_id,
-                    "metadata.thread_id": thread_id,
-                    "summary_id": None
-                },
-                limit=100
+                filters={"agent_id": agent_id, "metadata.thread_id": thread_id, "summary_id": None},
+                limit=100,
             )
 
             if not messages:
                 return "No unsummarized messages found in this thread."
 
             # Format messages as text
-            content = "\n".join([
-                f"[{m.metadata.get('role', 'unknown')}]: {m.content}"
-                for m in messages
-            ])
+            content = "\n".join(
+                [f"[{m.metadata.get('role', 'unknown')}]: {m.content}" for m in messages]
+            )
 
             # Use context engineer to summarize and store
             engineer = ContextEngineer()
@@ -164,14 +156,12 @@ def create_summarize_conversation_tool(memory_manager, llm, agent_id: str):
                 memory_manager=memory_manager,
                 llm=llm,
                 agent_id=agent_id,
-                thread_id=thread_id
+                thread_id=thread_id,
             )
 
             # Mark messages as summarized
             marked_count = await memory_manager.episodic.mark_as_summarized(
-                agent_id=agent_id,
-                thread_id=thread_id,
-                summary_id=result["summary_id"]
+                agent_id=agent_id, thread_id=thread_id, summary_id=result["summary_id"]
             )
 
             return (
@@ -187,11 +177,7 @@ def create_summarize_conversation_tool(memory_manager, llm, agent_id: str):
     return summarize_conversation
 
 
-def create_summary_tools(
-    memory_manager,
-    llm,
-    agent_id: str
-) -> list:
+def create_summary_tools(memory_manager, llm, agent_id: str) -> list:
     """
     Create all summary-related tools.
 
@@ -204,7 +190,7 @@ def create_summary_tools(
         List of LangChain tools
     """
     return [
-        create_expand_summary_tool(memory_manager),
+        create_expand_summary_tool(memory_manager, agent_id=agent_id),
         create_summarize_tool(memory_manager, llm, agent_id),
-        create_summarize_conversation_tool(memory_manager, llm, agent_id)
+        create_summarize_conversation_tool(memory_manager, llm, agent_id),
     ]

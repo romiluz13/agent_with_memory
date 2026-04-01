@@ -4,17 +4,19 @@ LLM-powered extraction of entities (PERSON, ORGANIZATION, LOCATION, SYSTEM, CONC
 Based on Oracle Memory Engineering pattern.
 """
 
-import logging
 import json
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+import logging
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from .base import Memory, MemoryStore, MemoryType
-from ..retrieval.vector_search import VectorSearchEngine
 from ..embeddings.voyage_client import get_embedding_service
+from ..retrieval.vector_search import VectorSearchEngine
+from .base import Memory, MemoryStore, MemoryType
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ ENTITY_TYPES = ["PERSON", "ORGANIZATION", "LOCATION", "SYSTEM", "CONCEPT"]
 @dataclass
 class ExtractionConfig:
     """Configuration for entity extraction."""
+
     model: str = "gemini-2.5-flash"
     temperature: float = 0.0
     max_tokens: int = 500
@@ -44,11 +47,7 @@ If no entities found, return: []
 
 Text: "{text}"'''
 
-    def __init__(
-        self,
-        collection: AsyncIOMotorCollection,
-        config: Optional[ExtractionConfig] = None
-    ):
+    def __init__(self, collection: AsyncIOMotorCollection, config: ExtractionConfig | None = None):
         """Initialize with MongoDB collection."""
         self.collection = collection
         self.search_engine = VectorSearchEngine(collection)
@@ -81,10 +80,11 @@ Text: "{text}"'''
             memory_dict = memory.model_dump(exclude={"id"})
             memory_dict["_id"] = ObjectId()
 
-            # Check for existing similar entity
+            # Check for existing similar entity (scoped to agent)
             existing = await self._find_existing_entity(
                 memory.metadata.get("entity_name", ""),
-                memory.metadata.get("entity_type", "")
+                memory.metadata.get("entity_type", ""),
+                agent_id=memory.agent_id,
             )
             if existing:
                 return await self._merge_entities(existing, memory)
@@ -102,8 +102,9 @@ Text: "{text}"'''
         query: str,
         limit: int = 10,
         threshold: float = 0.7,
-        search_mode: str = "hybrid"
-    ) -> List[Memory]:
+        agent_id: str | None = None,
+        search_mode: str = "hybrid",
+    ) -> list[Memory]:
         """
         Retrieve entity memories by similarity.
 
@@ -114,6 +115,7 @@ Text: "{text}"'''
             query: Search query text
             limit: Maximum memories to return
             threshold: Minimum similarity threshold
+            agent_id: Filter by agent (CRITICAL for multi-tenant isolation)
             search_mode: Search strategy - "hybrid" (default), "semantic", or "text"
 
         Returns:
@@ -126,6 +128,8 @@ Text: "{text}"'''
 
             # Execute search based on mode
             filter_query = {"memory_type": "entity"}
+            if agent_id:
+                filter_query["agent_id"] = agent_id
 
             if search_mode == "hybrid":
                 # Hybrid search: vector + full-text with $rankFusion (DEFAULT)
@@ -133,14 +137,14 @@ Text: "{text}"'''
                     query_text=query,
                     query_embedding=embedding_result.embedding,
                     limit=limit,
-                    filter_query=filter_query
+                    filter_query=filter_query,
                 )
             else:
                 # Vector-only search (semantic mode)
                 results = await self.search_engine.search(
                     query_embedding=embedding_result.embedding,
                     limit=limit,
-                    filter_query=filter_query
+                    filter_query=filter_query,
                 )
 
             memories = []
@@ -155,11 +159,8 @@ Text: "{text}"'''
 
             # Sort by mentions and search score
             memories.sort(
-                key=lambda m: (
-                    m.metadata.get("mentions", 1),
-                    m.metadata.get("search_score", 0)
-                ),
-                reverse=True
+                key=lambda m: (m.metadata.get("mentions", 1), m.metadata.get("search_score", 0)),
+                reverse=True,
             )
 
             return memories
@@ -168,7 +169,7 @@ Text: "{text}"'''
             logger.error(f"Failed to retrieve entity memories: {e}")
             return []
 
-    async def get_by_id(self, memory_id: str) -> Optional[Memory]:
+    async def get_by_id(self, memory_id: str) -> Memory | None:
         """Get entity memory by ID."""
         try:
             doc = await self.collection.find_one({"_id": ObjectId(memory_id)})
@@ -180,13 +181,12 @@ Text: "{text}"'''
             logger.error(f"Failed to get entity memory {memory_id}: {e}")
             return None
 
-    async def update(self, memory_id: str, updates: Dict[str, Any]) -> bool:
+    async def update(self, memory_id: str, updates: dict[str, Any]) -> bool:
         """Update an entity memory."""
         try:
-            updates["updated_at"] = datetime.utcnow()
+            updates["updated_at"] = datetime.now(UTC)
             result = await self.collection.update_one(
-                {"_id": ObjectId(memory_id)},
-                {"$set": updates}
+                {"_id": ObjectId(memory_id)}, {"$set": updates}
             )
             return result.modified_count > 0
         except Exception as e:
@@ -203,21 +203,15 @@ Text: "{text}"'''
             return False
 
     async def list_memories(
-        self,
-        filters: Optional[Dict[str, Any]] = None,
-        limit: int = 100,
-        offset: int = 0
-    ) -> List[Memory]:
+        self, filters: dict[str, Any] | None = None, limit: int = 100, offset: int = 0
+    ) -> list[Memory]:
         """List entity memories with filters."""
         try:
             query = filters or {}
             query["memory_type"] = "entity"
 
             cursor = self.collection.find(query).skip(offset).limit(limit)
-            cursor = cursor.sort([
-                ("metadata.mentions", -1),
-                ("importance", -1)
-            ])
+            cursor = cursor.sort([("metadata.mentions", -1), ("importance", -1)])
 
             memories = []
             async for doc in cursor:
@@ -242,12 +236,8 @@ Text: "{text}"'''
             return 0
 
     async def extract_and_store(
-        self,
-        text: str,
-        llm,
-        agent_id: str,
-        user_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+        self, text: str, llm, agent_id: str, user_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Extract entities from text using LLM and store them.
 
@@ -279,7 +269,7 @@ Text: "{text}"'''
             if start == -1 or end == -1:
                 return []
 
-            entities = json.loads(result[start:end+1])
+            entities = json.loads(result[start : end + 1])
 
             # Store each extracted entity
             stored_entities = []
@@ -307,9 +297,9 @@ Text: "{text}"'''
                         "entity_type": entity_type,
                         "description": description,
                         "mentions": 1,
-                        "extracted_from": truncated_text[:100]
+                        "extracted_from": truncated_text[:100],
                     },
-                    tags=[entity_type.lower()]
+                    tags=[entity_type.lower()],
                 )
 
                 await self.store(memory)
@@ -326,20 +316,31 @@ Text: "{text}"'''
             return []
 
     async def _find_existing_entity(
-        self,
-        name: str,
-        entity_type: str
-    ) -> Optional[Memory]:
-        """Find existing entity by name and type."""
+        self, name: str, entity_type: str, agent_id: str | None = None
+    ) -> Memory | None:
+        """Find existing entity by name and type.
+
+        Args:
+            name: Entity name to search for
+            entity_type: Entity type (PERSON, ORGANIZATION, etc.)
+            agent_id: Filter by agent (CRITICAL for multi-tenant isolation)
+
+        Returns:
+            Existing Memory if found, None otherwise
+        """
         if not name:
             return None
 
         try:
-            doc = await self.collection.find_one({
+            query = {
                 "memory_type": "entity",
-                "metadata.entity_name": {"$regex": f"^{name}$", "$options": "i"},
-                "metadata.entity_type": entity_type
-            })
+                "metadata.entity_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
+                "metadata.entity_type": entity_type,
+            }
+            if agent_id:
+                query["agent_id"] = agent_id
+
+            doc = await self.collection.find_one(query)
 
             if doc:
                 doc["id"] = str(doc.pop("_id"))
@@ -358,35 +359,35 @@ Text: "{text}"'''
         existing.importance = min(1.0, existing.importance + 0.1)
 
         await self.update(
-            existing.id,
-            {
-                "metadata": existing.metadata,
-                "importance": existing.importance
-            }
+            existing.id, {"metadata": existing.metadata, "importance": existing.importance}
         )
 
         return existing.id
 
     async def get_entities_by_type(
-        self,
-        entity_type: str,
-        limit: int = 50
-    ) -> List[Memory]:
-        """Get entities of a specific type."""
-        return await self.list_memories(
-            filters={"metadata.entity_type": entity_type},
-            limit=limit
-        )
+        self, entity_type: str, agent_id: str | None = None, limit: int = 50
+    ) -> list[Memory]:
+        """Get entities of a specific type.
+
+        Args:
+            entity_type: Entity type (PERSON, ORGANIZATION, etc.)
+            agent_id: Filter by agent (CRITICAL for multi-tenant isolation)
+            limit: Maximum entities to return
+
+        Returns:
+            List of entity memories matching the type
+        """
+        filters = {"metadata.entity_type": entity_type}
+        if agent_id:
+            filters["agent_id"] = agent_id
+        return await self.list_memories(filters=filters, limit=limit)
 
     async def increment_mentions(self, memory_id: str) -> bool:
         """Increment entity mention count."""
         try:
             result = await self.collection.update_one(
                 {"_id": ObjectId(memory_id)},
-                {
-                    "$inc": {"metadata.mentions": 1},
-                    "$set": {"updated_at": datetime.utcnow()}
-                }
+                {"$inc": {"metadata.mentions": 1}, "$set": {"updated_at": datetime.now(UTC)}},
             )
             return result.modified_count > 0
         except Exception as e:

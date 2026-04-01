@@ -9,7 +9,6 @@ Usage:
     python scripts/setup_indexes.py
 """
 
-import asyncio
 import os
 import sys
 import time
@@ -17,7 +16,6 @@ import time
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
-
 
 # Memory collections that need indexes
 MEMORY_COLLECTIONS = [
@@ -27,8 +25,32 @@ MEMORY_COLLECTIONS = [
     "working_memories",
     "cache_memories",
     "entity_memories",
-    "summary_memories"
+    "summary_memories",
 ]
+
+
+def create_ttl_index(collection, field="ttl"):
+    """Create TTL index for automatic document expiration.
+
+    mongodb-query-optimizer: TTL indexes automatically remove expired documents.
+    expireAfterSeconds=0 means expire at the datetime value in the ttl field.
+
+    Args:
+        collection: MongoDB collection
+        field: Field name containing the expiration datetime
+    """
+    print(f"  Creating TTL index on '{field}' for {collection.name}...")
+    try:
+        result = collection.create_index(field, expireAfterSeconds=0)
+        print(f"    TTL index created: {result}")
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "already exists" in error_msg or "IndexOptionsConflict" in error_msg:
+            print(f"    TTL index already exists on '{field}'")
+            return True
+        print(f"    Error creating TTL index: {e}")
+        return False
 
 
 def create_vector_search_index(collection, index_name="vector_index", dimensions=1024):
@@ -58,6 +80,11 @@ def create_vector_search_index(collection, index_name="vector_index", dimensions
             {"type": "filter", "path": "agent_id"},
             {"type": "filter", "path": "user_id"},
             {"type": "filter", "path": "memory_type"},
+            {"type": "filter", "path": "thread_id"},
+            {"type": "filter", "path": "timestamp"},
+            {"type": "filter", "path": "importance"},
+            {"type": "filter", "path": "metadata.tags"},
+            {"type": "filter", "path": "metadata.entity_type"},
         ]
     }
 
@@ -170,7 +197,7 @@ def setup_indexes():
 
     try:
         # Connect to MongoDB
-        print(f"🔌 Connecting to MongoDB...")
+        print("🔌 Connecting to MongoDB...")
         client = MongoClient(mongodb_uri)
         db = client[database_name]
 
@@ -203,6 +230,11 @@ def setup_indexes():
             # Create text search index
             if create_text_search_index(collection):
                 text_success += 1
+
+            # Create TTL index for collections that use TTL
+            # mongodb-query-optimizer: TTL indexes auto-remove expired documents
+            if collection_name in ("working_memories", "cache_memories"):
+                create_ttl_index(collection, field="ttl")
 
             print()
 
