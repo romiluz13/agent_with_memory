@@ -1,438 +1,437 @@
-# 🧠 Agent With Memory (AWM 2.0)
+# Agent With Memory (AWM 2.0)
 
-**Production-ready AI memory system for any agent.** Built on MongoDB Atlas Vector Search.
+AWM 2.0 is a MongoDB-first starter for building AI applications with persistent memory, retrieval, and agent runtime infrastructure.
 
-## 🎯 What This Is
+It is designed for developers who want a serious reference implementation, not a toy chatbot and not a one-command production platform.
 
-A **plug-and-play memory layer** that gives any AI agent persistent memory across sessions. Your agent remembers users, learns from interactions, and builds knowledge over time.
+## What You Get
 
-**Without memory**: ChatGPT that forgets everything.
-**With memory**: A true AI agent that learns and grows.
+- A real FastAPI API surface for agents, chat, memories, evaluation, HITL, time-travel, and WebSocket chat
+- A 7-type memory system backed by MongoDB
+- Hybrid retrieval with vector search, text search, and fallbacks when cluster capabilities are limited
+- A LangGraph-first runtime with persisted checkpoints and long-term memory
+- Seeded validation scripts for realistic data, Atlas cloud validation, and Atlas Local Preview validation
+- Test-only external LLM smoke tooling that stays out of runtime code paths
 
-## ⚡ Quick Start (5 Minutes)
+## What This Repo Is
+
+This repo is a strong starting point if you are building:
+
+- an AI assistant with cross-session memory
+- a memory-rich RAG application
+- a LangGraph-based agent on MongoDB
+- a reference architecture for MongoDB-powered AI systems
+
+This repo is not:
+
+- a promise that one `git clone` gives you a production app
+- a hosted SaaS template with auth, billing, frontend, and deployment all finished
+- a benchmark-backed claim of being the single best boilerplate on earth
+
+## Why Developers Actually Use It
+
+The point is not “look how many features fit in one README.”
+
+The point is that you can start with a codebase that already solves the annoying parts teams usually rebuild badly:
+
+- memory types with clear ownership and isolation rules
+- retrieval that can work across cluster capability differences
+- long-running chat state and replayable checkpoints
+- seeded validation with real data instead of fake “hello world” strings
+- API routes that match the runtime instead of demo-only placeholders
+
+If you are building your own agent app, you should be able to copy patterns from here without first reverse-engineering a bunch of undocumented decisions.
+
+## Feature Map
+
+### Memory
+
+| Type | Purpose |
+|---|---|
+| `episodic` | conversation history and past events |
+| `semantic` | facts and knowledge |
+| `procedural` | workflows and learned procedures |
+| `working` | active session context |
+| `cache` | fast semantic cache |
+| `entity` | extracted people, systems, orgs, concepts |
+| `summary` | compressed context with JIT expansion |
+
+Key behaviors implemented in code:
+
+- multi-tenant isolation via `agent_id` and optional `user_id`
+- summary offload instead of destructive history deletion
+- entity extraction and graph-style relationship traversal
+- bounded graph relationship arrays to avoid unbounded growth
+
+### Retrieval
+
+- MongoDB Atlas Vector Search
+- MongoDB Atlas Search text indexes
+- hybrid search with vector + text fusion where supported
+- fallback to vector-only when cluster capabilities do not allow full hybrid execution
+- retrieval projections that avoid extra document fetches on the hot path
+
+### Runtime
+
+- LangGraph-first orchestration
+- persisted checkpoints via MongoDB
+- HTTP chat
+- SSE streaming
+- WebSocket chat
+- HITL approval flow
+- time-travel history, snapshot, and replay routes
+
+### Validation
+
+- deterministic realistic seeding
+- Atlas cloud validation lane
+- Atlas Local Preview validation lane
+- test-only external LLM smoke lane for live model verification
+
+## Why MongoDB Here
+
+Most RAG demos get complicated in the wrong place.
+
+They start with one database for app state, one store for vectors, one search system, and a pile of glue code. That can look sophisticated in a diagram, but it is a pain to debug when you are still trying to answer simple questions like:
+
+- what did this agent remember
+- why did retrieval return this result
+- where did this checkpoint come from
+- which indexes exist in this environment
+
+This repo is opinionated about MongoDB because it keeps those concerns close together:
+
+- application data
+- long-term memory
+- text search
+- vector search
+- graph-style traversal
+- replay and checkpoint-adjacent debugging
+
+For developers, the value is practical:
+
+- fewer systems to bootstrap before you can test real behavior
+- one mental model for data while the product is still changing fast
+- simpler seeded validation and local repro
+- less “impressive” architecture that collapses the moment memory starts acting like real application state
+
+This is not a claim that MongoDB is the right answer for every stack. It is a claim that for a memory-heavy AI starter, it gives you a cleaner path from prototype to serious system.
+
+## Architecture
+
+```text
+Client / UI / Agent Caller
+        |
+        v
+FastAPI API
+  - /api/v1/agents
+  - /api/v1/chat
+  - /api/v1/memories
+  - /api/v1/query
+  - /api/v1/hitl
+  - /api/v1/time-travel
+  - /api/v1/evaluate
+  - /api/v1/ws/{agent_id}
+        |
+        v
+LangGraph Runtime + Agent Registry
+        |
+        +--> MongoDBSaver checkpoints
+        +--> MongoDB long-term memory store
+        +--> MemoryManager
+                 |
+                 +--> episodic
+                 +--> semantic
+                 +--> procedural
+                 +--> working
+                 +--> cache
+                 +--> entity
+                 +--> summary
+                 +--> graph
+```
+
+## Quick Start
+
+### 1. Install
 
 ```bash
-# 1. Clone
-git clone https://github.com/romiluz13/agent_with_memory.git
-cd agent_with_memory
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,test]"
+cp env.example .env
+```
 
-# 2. Setup
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+Minimum useful env:
 
-# 3. Configure (create .env file)
-MONGODB_URI=mongodb+srv://...
+```bash
+MONGODB_URI=...
 VOYAGE_API_KEY=pa-...
-GOOGLE_API_KEY=AIza...
+OPENAI_API_KEY=...
+```
 
-# 4. Run the demo
+You can also use `GOOGLE_API_KEY` or `ANTHROPIC_API_KEY` instead of OpenAI.
+
+### 2. Run the demo
+
+```bash
 python demo_memory_agent.py
 ```
 
-The demo proves memory works across sessions:
-- **Session 1**: Tell the agent your name, job, pet, etc.
-- **Session 2**: NEW session asks what it remembers → It recalls everything!
+### 3. Run the API
 
-## 🔌 Plug & Play - Add Memory to ANY Agent
+```bash
+uvicorn src.api.main:app --reload
+```
+
+Important routes:
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | compatibility health check |
+| `GET /health/ready` | readiness probe |
+| `POST /chat` | compatibility chat route backed by the real runtime |
+| `POST /api/v1/chat/` | canonical chat route |
+| `POST /api/v1/chat/stream` | SSE streaming |
+| `GET /api/v1/agents` | list agents |
+| `POST /api/v1/memories/` | store memory |
+| `POST /api/v1/memories/search` | search memories |
+| `GET /api/v1/memories/stats/summary` | memory stats |
+| `POST /api/v1/query` | natural language to MongoDB query |
+| `GET /api/v1/hitl/pending/{agent_id}` | pending approvals |
+| `GET /api/v1/time-travel/history/{thread_id}` | checkpoint history |
+| `POST /api/v1/evaluate` | RAG evaluation |
+| `WS /api/v1/ws/{agent_id}` | WebSocket chat |
+
+## Use It as a Library
+
+### Memory Manager
 
 ```python
-from src.memory.manager import MemoryManager
 from src.memory.base import MemoryType
-from src.storage.mongodb_client import MongoDBClient, MongoDBConfig
+from src.memory.manager import MemoryManager
+from src.storage.mongodb_client import initialize_mongodb
 
-# 1. Connect to MongoDB
-config = MongoDBConfig(uri="mongodb+srv://...", database="my_app")
-db_client = MongoDBClient()
-await db_client.initialize(config)
+mongodb = await initialize_mongodb(
+    uri="mongodb://localhost:27018/?directConnection=true",
+    database="my_app",
+)
 
-# 2. Create Memory Manager
-memory = MemoryManager(db_client.db)
+memory = MemoryManager(mongodb.db)
 
-# 3. Store memories (from your agent's conversations)
 await memory.store_memory(
-    content="User said they love Python and work at Google",
+    content="User prefers concise answers and works on retrieval systems",
     memory_type=MemoryType.EPISODIC,
-    agent_id="my_agent",
-    user_id="user_123"
+    agent_id="assistant",
+    user_id="user-123",
 )
 
-# 4. Retrieve relevant memories (before responding)
-memories = await memory.episodic.retrieve(
-    query="What programming language does the user like?",
-    agent_id="my_agent",
-    user_id="user_123",
-    limit=5
-)
-
-# 5. Use memories in your agent's context
-for mem in memories:
-    print(f"Remembered: {mem.content}")
-```
-
-**That's it!** 5 lines to add persistent memory to any agent.
-
-## 🧠 7-Type Memory System
-
-| Type | Purpose | Example |
-|------|---------|---------|
-| **EPISODIC** | Conversation history | "User asked about Python tutorials" |
-| **SEMANTIC** | Facts & knowledge | "MongoDB supports vector search" |
-| **PROCEDURAL** | How-to workflows | "To deploy: build → push → update" |
-| **WORKING** | Current session context | "Currently helping with optimization" |
-| **CACHE** | Fast retrieval | Frequently accessed data |
-| **ENTITY** | People, places, things | "John works at Google" |
-| **SUMMARY** | Compressed context | Condensed conversation summaries |
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────┐
-│         Your Agent (Any Framework)       │
-│   LangChain, LangGraph, Custom, etc.    │
-└────────────────┬────────────────────────┘
-                 │
-┌────────────────▼────────────────────────┐
-│           MemoryManager                  │
-│   • store_memory()                       │
-│   • retrieve_memories()                  │
-│   • extract_entities()                   │
-└────────────────┬────────────────────────┘
-                 │
-┌────────────────▼────────────────────────┐
-│     MongoDB Atlas + Vector Search        │
-│   • Voyage AI Embeddings (1024 dims)    │
-│   • Hybrid Search (vector + full-text)  │
-│   • Multi-tenant Isolation              │
-└──────────────────────────────────────────┘
-```
-
-## State-of-the-Art Features (v2.1)
-
-Built on the [LangChain + MongoDB Partnership](https://blog.langchain.com/announcing-the-langchain-mongodb-partnership-the-ai-agent-stack-that-runs-on-the-database-you-already-trust/) architecture:
-
-### Observability Tracing
-End-to-end tracing of memory operations, retrieval calls, and agent decisions.
-```python
-# Just set env vars - zero-overhead when disabled
-export LANGFUSE_PUBLIC_KEY=pk-...
-export LANGFUSE_SECRET_KEY=sk-...
-# All memory store/retrieve operations are automatically traced
-```
-
-### RAG Evaluation Pipeline
-Measure retrieval quality with LLM-as-judge metrics:
-```python
-from src.evaluation.evaluator import RAGEvaluator
-evaluator = RAGEvaluator(llm=your_llm)
-result = await evaluator.evaluate(
-    question="What does the user like?",
-    answer="The user likes Python",
-    contexts=["User said they love Python"]
-)
-# Returns: precision, recall, relevancy, faithfulness scores
-```
-
-### Natural Language to MongoDB Queries (Text-to-MQL)
-Agents query operational data using plain English:
-```python
-from src.tools.nl_to_mql import NLToMQLGenerator
-generator = NLToMQLGenerator(db=db, llm=llm)
-result = await generator.generate_query(
-    question="Show all episodic memories from last week",
-    agent_id="my_agent"
-)
-# Generates safe MQL with agent_id injection, collection whitelist, read-only enforcement
-```
-
-### GraphRAG (Knowledge Graph Retrieval)
-Entity relationships with MongoDB `$graphLookup` traversal:
-```python
-from src.memory.graph import GraphMemory
-graph = GraphMemory(entity_collection, db)
-await graph.add_relationship("John", "Google", "WORKS_AT", agent_id="my_agent")
-related = await graph.graph_lookup("John", agent_id="my_agent", max_depth=2)
-# Uses $graphLookup with agent_id scoping and entity-boosted reranking
-```
-
-### Human-in-the-Loop (HITL)
-Pause agent execution for human approval on sensitive operations:
-```python
-from src.core.hitl import check_approval_needed, HITLConfig
-config = HITLConfig(sensitive_tools={"delete_memory", "clear_all"})
-if await check_approval_needed("delete_memory", config):
-    # Create approval request, wait for human decision
-    # API: GET /api/v1/hitl/pending/{agent_id}
-    # API: POST /api/v1/hitl/approve/{request_id}
-```
-
-### Time-Travel Debugging
-Replay any prior agent state via MongoDBSaver checkpoints:
-```
-GET /api/v1/time-travel/history/{thread_id}     # State history
-GET /api/v1/time-travel/snapshot/{thread_id}/{checkpoint_id}  # Specific state
-POST /api/v1/time-travel/replay                  # Replay from checkpoint
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/health/ready` | GET | Readiness probe |
-| `/api/v1/evaluate` | POST | RAG evaluation with 4 metrics |
-| `/api/v1/query` | POST | Natural language to MQL |
-| `/api/v1/hitl/pending/{agent_id}` | GET | Pending approval requests |
-| `/api/v1/hitl/approve/{request_id}` | POST | Approve a request |
-| `/api/v1/hitl/reject/{request_id}` | POST | Reject a request |
-| `/api/v1/time-travel/history/{thread_id}` | GET | State history |
-| `/api/v1/time-travel/snapshot/{thread_id}/{id}` | GET | Specific checkpoint |
-
-## Project Structure
-
-```
-agent_with_memory/
-├── demo_memory_agent.py    # START HERE - Real-life demo
-├── scripts/
-│   ├── setup_indexes.py           # Vector + text + TTL indexes
-│   ├── setup_schema_validation.py # $jsonSchema validation
-│   └── setup_graph_indexes.py     # B-tree indexes for $graphLookup
-├── src/
-│   ├── memory/             # 7-type memory system + GraphRAG
-│   │   ├── manager.py      # Main orchestrator
-│   │   ├── episodic.py     # Conversation history
-│   │   ├── semantic.py     # Facts & knowledge
-│   │   ├── procedural.py   # Workflows
-│   │   ├── working.py      # Session context
-│   │   ├── cache.py        # Fast retrieval
-│   │   ├── entity.py       # Entity extraction
-│   │   ├── summary.py      # Context compression
-│   │   └── graph.py        # GraphRAG with $graphLookup
-│   ├── observability/      # End-to-end tracing
-│   │   └── tracer.py       # Langfuse/LangSmith with graceful degradation
-│   ├── evaluation/         # RAG quality measurement
-│   │   └── evaluator.py    # LLM-as-judge (precision, recall, relevancy, faithfulness)
-│   ├── core/               # Agent core
-│   │   ├── agent.py        # Base agent
-│   │   ├── agent_langgraph.py # LangGraph agent with MongoDBSaver
-│   │   └── hitl.py         # Human-in-the-loop approval workflow
-│   ├── tools/              # Agent tools
-│   │   ├── nl_to_mql.py    # Natural language to MongoDB queries
-│   │   └── summary_tools.py # Summary expansion
-│   ├── context/            # Token management
-│   ├── storage/            # MongoDB client (w:majority, retryWrites)
-│   ├── embeddings/         # Voyage AI (1024 dims)
-│   ├── retrieval/          # Hybrid search ($rankFusion)
-│   │   └── filters/        # Vector, Atlas Search, Lexical prefilters
-│   └── api/                # FastAPI REST API
-│       └── routes/         # evaluation, nl_query, hitl, time_travel
-├── tests/                  # 250+ unit tests
-└── CLAUDE.md               # Project documentation
-```
-
-## 🔧 Key Features
-
-### Multi-Tenant Isolation
-Each agent and user has isolated memories:
-```python
-# Agent A's memories are separate from Agent B's
-await memory.store_memory(..., agent_id="agent_a", user_id="user_1")
-await memory.store_memory(..., agent_id="agent_b", user_id="user_1")
-```
-
-### Entity Extraction
-Automatically extract people, organizations, locations:
-```python
-entities = await memory.extract_entities(
-    text="I'm John, a software engineer at Google",
-    agent_id="my_agent",
-    llm=your_llm
-)
-# Returns: [{"name": "John", "type": "PERSON"}, {"name": "Google", "type": "ORGANIZATION"}]
-```
-
-### Context Compression
-Auto-compress when context gets too long:
-```python
-from src.context.engineer import ContextEngineer
-
-engineer = ContextEngineer()
-if engineer.should_compress(context, model="gpt-4"):
-    compressed = await engineer.compress(context, llm)
-```
-
-### Hybrid Search (Vector + Full-Text)
-Find relevant memories using MongoDB's `$rankFusion` for best results:
-```python
-# Hybrid search is the DEFAULT - combines semantic + keyword matching
-memories = await memory.episodic.retrieve(
-    query="What does the user like?",
-    agent_id="my_agent",
-    user_id="user_123",
+results = await memory.retrieve_memories(
+    query="What style does the user prefer?",
+    agent_id="assistant",
+    user_id="user-123",
     limit=5,
-    threshold=0.5,
-    search_mode="hybrid"  # Default - can also use "semantic" or "text"
 )
 ```
 
-**Why hybrid?**
-- "John" → Exact keyword match finds the person
-- "software developer" → Semantic similarity finds "engineer"
-- Combined → Best of both worlds
+### LangGraph Agent
 
-### Atlas Tier Support
-Works on ALL MongoDB Atlas tiers with automatic fallback:
+```python
+from src.core.agent_langgraph import MongoDBLangGraphAgent
 
-| Tier | $rankFusion | Text Search | Fallback |
-|------|-------------|-------------|----------|
-| **M10+** | Native | Full | - |
-| **M0/M2** | Manual RRF | Full | Reciprocal Rank Fusion |
-| **Vector-only** | - | - | Vector search only |
+agent = MongoDBLangGraphAgent(
+    mongodb_uri="mongodb://localhost:27018/?directConnection=true",
+    agent_name="assistant",
+    model_provider="openai",
+    model_name="gpt-4o",
+    database_name="my_app",
+)
 
-The system auto-detects your cluster tier and uses the best available strategy.
-
-## 🧪 Testing
-
-```bash
-# Run all tests (154+ tests)
-python -m pytest tests/ -v
-
-# Unit tests for retrieval system (148 tests)
-python -m pytest tests/retrieval/ -v
-
-# Production-realistic E2E tests (6 scenarios)
-python -m pytest tests/integration/test_production_realistic.py -v
+response = await agent.invoke(
+    message="Remember that I prefer short answers.",
+    user_id="user-123",
+    conversation_id="thread-1",
+)
 ```
 
-### Production Test Scenarios
-| Test | What it Validates |
-|------|-------------------|
-| Customer Support Conversation | Full memory store/retrieve flow |
-| Multi-Tenant Isolation | Agent isolation via agent_id |
-| Long Conversation Memory | Memory over 20+ turns |
-| Cross-Session Persistence | Data persists across sessions |
-| Concurrent Users Stress | 100 users, 1000 operations |
-| Hybrid Search Quality | Vector + text fusion |
+## Local Validation Lane: Atlas Local Preview
 
-## 📝 Environment Variables
+This repo now supports a real Atlas Local Preview workflow for search and vector validation.
+
+### Reuse an existing local preview container or create one
 
 ```bash
-# Required
-MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/
-VOYAGE_API_KEY=pa-...          # For embeddings
-GOOGLE_API_KEY=AIza...         # For LLM (or use OpenAI)
-
-# Optional
-OPENAI_API_KEY=sk-...          # Alternative LLM
-ANTHROPIC_API_KEY=sk-ant-...   # Alternative LLM
+python scripts/bootstrap_local_deployment.py
 ```
 
-## 🚀 MongoDB Atlas Setup
-
-1. Create a [MongoDB Atlas](https://www.mongodb.com/atlas) account (free tier works!)
-2. Create a cluster
-3. Get your connection string
-4. Run the setup script to create indexes:
+On this machine, the script detects and reuses a running preview container and prints a host-safe URI such as:
 
 ```bash
-# Create all required indexes (vector + text for hybrid search)
+mongodb://localhost:27018/?directConnection=true
+```
+
+### Validate local search support
+
+```bash
+python scripts/validate_atlas_local_preview.py
+```
+
+This script:
+
+- creates a real document
+- creates a real vector index
+- creates a real text index
+- waits for both to become ready
+
+### Point the app at Atlas Local Preview
+
+```bash
+export MONGODB_URI="mongodb://localhost:27018/?directConnection=true"
+export MONGODB_VALIDATION_LANE=local_validation
 python scripts/setup_indexes.py
+uvicorn src.api.main:app --reload
 ```
 
-### Search Indexes
+## Cloud Validation Lane
 
-The setup script creates **14 indexes** (7 vector + 7 text) for hybrid search:
+For Atlas cloud validation with realistic data:
 
-**Vector Index** (for semantic similarity):
-```json
-{
-  "name": "vector_index",
-  "type": "vectorSearch",
-  "definition": {
-    "fields": [
-      {"type": "vector", "path": "embedding", "similarity": "cosine", "numDimensions": 1024},
-      {"type": "filter", "path": "agent_id"},
-      {"type": "filter", "path": "user_id"}
-    ]
-  }
-}
+```bash
+export MONGODB_URI="mongodb+srv://..."
+export MONGODB_VALIDATION_LANE=cloud_validation
+export VOYAGE_API_KEY="pa-..."
+
+python scripts/seed_realistic_data.py --reset
+python scripts/run_seeded_validation.py
 ```
 
-**Text Index** (for keyword matching):
-```json
-{
-  "name": "text_search_index",
-  "type": "search",
-  "definition": {
-    "mappings": {
-      "fields": {
-        "content": {"type": "string", "analyzer": "lucene.standard"},
-        "agent_id": {"type": "string"},
-        "user_id": {"type": "string"}
-      }
-    }
-  }
-}
+The seeded validation script checks:
+
+- collection population
+- retrieval sanity
+- API surface health
+- live LLM availability for chat
+
+## Test-Only External LLM Lane
+
+The repo includes a test-only smoke script for an external LLM API or gateway. It is not wired into product runtime code.
+
+Use it when you want to validate that an external model endpoint is alive before blaming the app:
+
+```bash
+export LLM_TEST_API_KEY="..."
+export LLM_TEST_API_BASE_URL="https://your-endpoint.example/v1/chat/completions"
+python scripts/test_llm_gateway.py --prompt "Return exactly the text: smoke ok"
 ```
 
-> **Note**: Indexes take 1-5 minutes to build after creation. The system gracefully falls back to vector-only search until text indexes are ready.
+This is useful for:
 
-## 🤝 Integration Examples
+- OpenAI-compatible chat endpoints
+- internal AI gateways
+- provider proxies that normalize multiple models behind one interface
 
-### With LangChain
-```python
-from langchain_openai import ChatOpenAI
-from src.memory.manager import MemoryManager
+If your endpoint uses a non-Bearer auth header, set:
 
-llm = ChatOpenAI(model="gpt-4")
-memory = MemoryManager(db)
-
-# Before each LLM call, retrieve relevant memories
-memories = await memory.episodic.retrieve(query=user_input, agent_id="my_agent")
-context = "\n".join([m.content for m in memories])
-
-response = llm.invoke(f"Context:\n{context}\n\nUser: {user_input}")
-
-# After LLM response, store the interaction
-await memory.store_memory(
-    content=f"User: {user_input}\nAssistant: {response}",
-    memory_type=MemoryType.EPISODIC,
-    agent_id="my_agent"
-)
+```bash
+export LLM_TEST_AUTH_HEADER="api-key"
+export LLM_TEST_AUTH_SCHEME=""
 ```
 
-### With LangGraph
-```python
-from langgraph.graph import StateGraph
-from src.memory.manager import MemoryManager
+If you want to test provider-native APIs directly, use the provider's own shape and auth model:
 
-memory = MemoryManager(db)
+- OpenAI uses the Responses API as the current primary path
+- Anthropic uses the Messages API
+- Gemini uses `generateContent` and `streamGenerateContent`
 
-def memory_node(state):
-    # Retrieve memories before processing
-    memories = await memory.episodic.retrieve(
-        query=state["input"],
-        agent_id=state["agent_id"]
-    )
-    state["context"] = memories
-    return state
+This lane is intentionally separate from the app runtime so provider checks stay lightweight and do not leak test-specific assumptions into product code.
 
-# Add to your graph
-workflow.add_node("memory", memory_node)
+## Natural Language to MongoDB Queries
+
+The repo includes a read-only NL-to-MQL tool with safety controls:
+
+- collection allowlist
+- read-only enforcement
+- agent scoping
+- blocked write operators such as `$merge` and `$out`
+
+Route:
+
+```bash
+POST /api/v1/query
 ```
 
-## 📄 License
+## HITL and Time Travel
 
-MIT License - Use it, modify it, ship it!
+Two parts of the repo that are easy to miss but useful in real systems:
 
-## 🙏 Acknowledgments
+- HITL approval routes for sensitive actions
+- replayable thread state through MongoDB-backed checkpoints
 
-- **MongoDB**: Atlas Vector Search
-- **Voyage AI**: High-quality embeddings
-- **LangChain/LangGraph**: Agent frameworks
+These are available through:
 
----
+- [`src/api/routes/hitl.py`](src/api/routes/hitl.py)
+- [`src/api/routes/time_travel.py`](src/api/routes/time_travel.py)
 
-**Built for the AI community** 🚀
+## Project Layout
 
-*Clone → Configure → Remember Everything*
+```text
+demo_memory_agent.py
+scripts/
+  bootstrap_local_deployment.py
+  setup_indexes.py
+  setup_schema_validation.py
+  setup_graph_indexes.py
+  seed_realistic_data.py
+  run_seeded_validation.py
+  validate_atlas_local_preview.py
+  test_llm_gateway.py
+src/
+  api/
+  context/
+  core/
+  embeddings/
+  evaluation/
+  memory/
+  observability/
+  retrieval/
+  storage/
+  tools/
+tests/
+```
+
+## Development Notes
+
+### MongoDB rule for this repo
+
+For MongoDB-specific behavior, this repo treats MongoDB documentation and MongoDB tooling behavior as the source of truth.
+
+### Python version
+
+Use Python `3.11` to `3.13`.
+
+### Install extras
+
+```bash
+pip install -e ".[dev,test]"
+```
+
+### Useful commands
+
+```bash
+ruff check src scripts tests
+python -m pytest tests -q
+python -m compileall src scripts tests
+```
+
+## Honest Status
+
+This repo is strong as a MongoDB-first AI starter, but you should position it honestly:
+
+- it is a serious reference implementation
+- it is not magic production in a box
+- some capabilities still depend on your Atlas tier, provider keys, and deployment choices
+
+That is normal for real AI infrastructure.
+
+## License
+
+MIT
