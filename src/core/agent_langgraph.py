@@ -1,28 +1,30 @@
 """
-MongoDB + LangGraph Agent Implementation
-Based on official MongoDB docs-notebooks/ai-integrations/langgraph.ipynb
-Integrates both short-term (checkpointer) and long-term (store) memory
+MongoDB + LangGraph Agent Implementation.
+
+Based on official MongoDB LangGraph integration patterns for short-term
+checkpointing plus long-term MongoDB-backed memory.
 """
 
 import logging
 import os
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict
 
-from langchain.agents import tool
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_openai import ChatOpenAI
-from langchain_voyageai import VoyageAIEmbeddings
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.store.mongodb import MongoDBStore, create_vector_index_config
 from pymongo import MongoClient
 
+from ..embeddings.langchain_voyage import VoyageEmbeddingsAdapter
 from ..observability.tracer import get_tracer
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,8 @@ class MongoDBLangGraphAgent:
     def __init__(
         self,
         mongodb_uri: str,
+        mongo_client: MongoClient | None = None,
+        agent_id: str | None = None,
         agent_name: str = "assistant",
         model_provider: str = "openai",
         model_name: str = "gpt-4o",
@@ -49,6 +53,9 @@ class MongoDBLangGraphAgent:
         database_name: str = "ai_agent_boilerplate",
         system_prompt: str | None = None,
         user_tools: list | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+        enable_streaming: bool = True,
     ):
         """
         Initialize the agent with MongoDB connection.
@@ -64,8 +71,16 @@ class MongoDBLangGraphAgent:
             user_tools: List of custom tools for the agent to use
         """
         self.mongodb_uri = mongodb_uri
+        self.agent_id = agent_id or f"{agent_name}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
         self.agent_name = agent_name
+        self.model_provider = model_provider
+        self.model_name = model_name
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.enable_streaming = enable_streaming
         self.database_name = database_name
+        self.created_at = datetime.now(UTC)
+        self.conversation_count = 0
         self.system_prompt = system_prompt or (
             "You are a helpful AI assistant with memory capabilities."
             " You can save important information and retrieve past memories."
@@ -74,12 +89,16 @@ class MongoDBLangGraphAgent:
         )
 
         # Initialize MongoDB client
-        self.client = MongoClient(mongodb_uri)
+        self.client = mongo_client or MongoClient(mongodb_uri)
+        self._owns_client = mongo_client is None
         self.db = self.client[database_name]
 
         # Initialize embeddings (from MongoDB notebook)
-        self.embedding_model = VoyageAIEmbeddings(model=embedding_model)
         self.embedding_dimensions = 1024  # Standard dimension for all embeddings
+        self.embedding_model = VoyageEmbeddingsAdapter(
+            model=embedding_model,
+            output_dimension=self.embedding_dimensions,
+        )
 
         # Initialize LLM
         self.llm = self._create_llm(model_provider, model_name)
@@ -88,6 +107,7 @@ class MongoDBLangGraphAgent:
         self.checkpointer = MongoDBSaver(self.client)
 
         # Initialize store for long-term memory
+        self._memory_store_cm = None
         self.memory_store = self._create_memory_store()
 
         # Define tools, including user-provided ones
@@ -96,39 +116,61 @@ class MongoDBLangGraphAgent:
         # Build the graph
         self.graph = self._build_graph()
 
-        logger.info(f"Initialized MongoDB LangGraph Agent: {agent_name}")
+        logger.info("Initialized MongoDB LangGraph Agent: %s (%s)", agent_name, self.agent_id)
 
     def _create_llm(self, provider: str, model_name: str):
         """Create LLM based on provider."""
         if provider == "openai":
-            return ChatOpenAI(model=model_name)
+            return ChatOpenAI(
+                model=model_name,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                streaming=self.enable_streaming,
+            )
         elif provider == "anthropic":
-            return ChatAnthropic(model=model_name)
+            return ChatAnthropic(
+                model=model_name,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
         elif provider == "google":
-            return ChatGoogleGenerativeAI(model=model_name)
+            return ChatGoogleGenerativeAI(
+                model=model_name,
+                temperature=self.temperature,
+                max_output_tokens=self.max_tokens,
+            )
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
     def _create_memory_store(self) -> MongoDBStore:
         """Create MongoDB store for long-term memory (from notebook)."""
-        # Vector search index configuration for memory collection
-        index_config = create_vector_index_config(
-            embed=self.embedding_model,
-            dims=self.embedding_dimensions,
-            relevance_score_fn="dotProduct",
-            fields=["content"],
-        )
-
-        # Create store with auto-indexing
-        store = MongoDBStore.from_conn_string(
-            conn_string=self.mongodb_uri,
-            db_name=self.database_name,
-            collection_name="agent_memories",
-            index_config=index_config,
-            auto_index_timeout=60,  # Wait for index creation
-        )
-
-        return store
+        try:
+            index_config = create_vector_index_config(
+                embed=self.embedding_model,
+                dims=self.embedding_dimensions,
+                relevance_score_fn="cosine",
+                fields=["content"],
+            )
+            self._memory_store_cm = MongoDBStore.from_conn_string(
+                conn_string=self.mongodb_uri,
+                db_name=self.database_name,
+                collection_name="agent_memories",
+                index_config=index_config,
+                auto_index_timeout=60,
+            )
+            return self._memory_store_cm.__enter__()
+        except Exception as exc:
+            logger.warning(
+                "Falling back to non-indexed MongoDBStore for %s due to index setup issue: %s",
+                self.agent_id,
+                exc,
+            )
+            self._memory_store_cm = MongoDBStore.from_conn_string(
+                conn_string=self.mongodb_uri,
+                db_name=self.database_name,
+                collection_name="agent_memories",
+            )
+            return self._memory_store_cm.__enter__()
 
     def _create_tools(self, user_tools: list) -> list:
         """Create agent tools, combining built-in and user-provided tools."""
@@ -140,46 +182,31 @@ class MongoDBLangGraphAgent:
         @tool
         def save_memory(content: str) -> str:
             """Save important information to memory."""
-            with MongoDBStore.from_conn_string(
-                conn_string=self.mongodb_uri,
-                db_name=self.database_name,
-                collection_name="agent_memories",
-                index_config=create_vector_index_config(
-                    embed=self.embedding_model,
-                    dims=self.embedding_dimensions,
-                    relevance_score_fn="dotProduct",
-                    fields=["content"],
-                ),
-            ) as store:
-                store.put(
-                    namespace=("agent", self.agent_name),
-                    key=f"memory_{hash(content)}",
-                    value={"content": content, "timestamp": datetime.now(UTC).isoformat()},
-                )
+            self.memory_store.put(
+                namespace=("agent", self.agent_id),
+                key=f"memory_{hash((self.agent_id, content))}",
+                value={
+                    "content": content,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "agent_id": self.agent_id,
+                },
+            )
             return f"Memory saved: {content}"
 
         # Tool to retrieve memories using vector search
         @tool
         def retrieve_memories(query: str) -> str:
             """Retrieve relevant memories based on a query."""
-            with MongoDBStore.from_conn_string(
-                conn_string=self.mongodb_uri,
-                db_name=self.database_name,
-                collection_name="agent_memories",
-                index_config=create_vector_index_config(
-                    embed=self.embedding_model,
-                    dims=self.embedding_dimensions,
-                    relevance_score_fn="dotProduct",
-                    fields=["content"],
-                ),
-            ) as store:
-                results = store.search(("agent", self.agent_name), query=query, limit=3)
+            try:
+                results = self.memory_store.search(("agent", self.agent_id), query=query, limit=3)
+            except Exception as exc:
+                logger.warning("Memory store search unavailable for %s: %s", self.agent_id, exc)
+                return "Long-term memory search is temporarily unavailable."
 
-                if results:
-                    memories = [result.value["content"] for result in results]
-                    return "Retrieved memories:\n" + "\n".join(memories)
-                else:
-                    return "No relevant memories found."
+            if results:
+                memories = [result.value["content"] for result in results]
+                return "Retrieved memories:\n" + "\n".join(memories)
+            return "No relevant memories found."
 
         # Vector search tool for documents
         @tool
@@ -195,7 +222,7 @@ class MongoDBLangGraphAgent:
                 embedding=self.embedding_model,
                 text_key="text",
                 embedding_key="embedding",
-                relevance_score_fn="dotProduct",
+                relevance_score_fn="cosine",
             )
 
             retriever = vector_store.as_retriever(
@@ -311,9 +338,7 @@ class MongoDBLangGraphAgent:
 
         # Extract final answer
         if result and "messages" in result:
-            final_message = result["messages"][-1]
-            if hasattr(final_message, "content"):
-                return final_message.content
+            return self._extract_final_message(result)
 
         return "I couldn't generate a response."
 
@@ -343,11 +368,100 @@ class MongoDBLangGraphAgent:
 
         # Extract final answer
         if result and "messages" in result:
-            final_message = result["messages"][-1]
-            if hasattr(final_message, "content"):
-                return final_message.content
+            return self._extract_final_message(result)
 
         return "I couldn't generate a response."
+
+    async def invoke(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Invoke the canonical LangGraph runtime for a chat turn."""
+        thread_id = self.build_thread_id(
+            user_id=user_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
+        response = await self.aexecute(message, thread_id=thread_id)
+        self.conversation_count += 1
+        return response
+
+    async def stream_events(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream actual graph execution events for a chat turn."""
+        thread_id = self.build_thread_id(
+            user_id=user_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+        )
+        config = {"configurable": {"thread_id": thread_id}}
+        input_state = {"messages": [HumanMessage(content=message)]}
+
+        yield {
+            "type": "run_started",
+            "agent_id": self.agent_id,
+            "thread_id": thread_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        async for update in self.graph.astream(input_state, config, stream_mode="updates"):
+            for node_name, payload in update.items():
+                event: dict[str, Any] = {
+                    "type": "node_completed",
+                    "agent_id": self.agent_id,
+                    "thread_id": thread_id,
+                    "node": node_name,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+                message_text = self._extract_final_message(payload)
+                if message_text:
+                    event["content"] = message_text
+                yield event
+
+        final_state = await self.graph.aget_state(config)
+        final_response = self._extract_final_message(final_state.values)
+        self.conversation_count += 1
+        yield {
+            "type": "completed",
+            "agent_id": self.agent_id,
+            "thread_id": thread_id,
+            "conversation_id": self.extract_conversation_id(thread_id),
+            "content": final_response,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+    def build_thread_id(
+        self,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Create a stable persisted thread ID scoped to the agent."""
+        base = conversation_id or session_id or user_id or "default"
+        return f"{self.agent_id}:{base}"
+
+    @staticmethod
+    def extract_conversation_id(thread_id: str) -> str:
+        """Extract the human conversation identifier from a persisted thread ID."""
+        if ":" not in thread_id:
+            return thread_id
+        return thread_id.split(":", 1)[1]
+
+    async def close(self) -> None:
+        """Close agent-owned resources."""
+        if self._memory_store_cm is not None:
+            self._memory_store_cm.__exit__(None, None, None)
+            self._memory_store_cm = None
+        if self._owns_client:
+            self.client.close()
 
     def create_vector_indexes(self):
         """
@@ -362,6 +476,10 @@ class MongoDBLangGraphAgent:
             collection = self.db[collection_name]
 
             # MongoDB Atlas vector index definition (mongodb-developer pattern)
+            # NOTE: This creates a minimal index for LangGraph's own collections
+            # (documents, agent_memories). For the 7 memory store collections,
+            # use scripts/setup_indexes.py which is the canonical index setup
+            # with full filter fields (agent_id, user_id, etc.).
             index_definition = {
                 "name": "vector_index",
                 "type": "vectorSearch",
@@ -419,6 +537,25 @@ class MongoDBLangGraphAgent:
                 else:
                     logger.warning(f"⚠️ Index creation issue for {collection_name}: {e}")
                     logger.info("This is usually fine - indexes can be created later")
+
+    @staticmethod
+    def _extract_final_message(state: dict[str, Any] | Any) -> str:
+        """Extract the last meaningful AI/tool message from graph state."""
+        if not isinstance(state, dict):
+            return ""
+
+        messages = state.get("messages", [])
+        if not messages:
+            return ""
+
+        last_message = messages[-1]
+        if isinstance(last_message, (AIMessage, ToolMessage, HumanMessage)):
+            return str(getattr(last_message, "content", "") or "")
+        if hasattr(last_message, "content"):
+            return str(last_message.content or "")
+        if isinstance(last_message, dict):
+            return str(last_message.get("content", "") or "")
+        return str(last_message)
 
 
 # Example usage matching MongoDB notebook patterns

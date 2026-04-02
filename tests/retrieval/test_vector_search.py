@@ -99,6 +99,48 @@ class TestNumCandidatesPipelineVerification:
         assert vector_search["numCandidates"] == 60  # 3 * 20
         assert vector_search["filter"] == filter_query
 
+    @pytest.mark.asyncio
+    async def test_search_projects_full_memory_source(self):
+        """Search results should carry the projected memory document to avoid N+1 fetches."""
+        captured_pipelines = []
+
+        class MockAsyncIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        class MockCollection:
+            def aggregate(self, pipeline):
+                captured_pipelines.append(pipeline)
+                return MockAsyncIterator()
+
+        engine = VectorSearchEngine(MockCollection())
+        await engine.search([0.1] * 1024, limit=2)
+
+        projection = captured_pipelines[0][1]["$project"]
+        for field in ("agent_id", "user_id", "memory_type", "created_at", "summary_id"):
+            assert field in projection
+
+    @pytest.mark.asyncio
+    async def test_search_result_includes_projected_document(self):
+        """Aggregated search results should expose the projected source document."""
+        projected_doc = {
+            "_id": "abc123",
+            "agent_id": "agent-1",
+            "memory_type": "semantic",
+            "content": "MongoDB supports vector search",
+            "metadata": {"topic": "search"},
+            "score": 0.91,
+        }
+
+        result = VectorSearchEngine._search_result_from_doc(projected_doc)
+
+        assert result.document is not None
+        assert result.document["agent_id"] == "agent-1"
+        assert result.document["memory_type"] == "semantic"
+
 
 class TestVectorSearchEngineReal:
     """REAL integration tests for VectorSearchEngine with MongoDB Atlas."""

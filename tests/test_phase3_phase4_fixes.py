@@ -5,6 +5,9 @@ Covers Issues #9-15 (Phase 3) and #16-22 (Phase 4).
 
 import inspect
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Base directory for source files
 SRC_DIR = Path(__file__).parent.parent / "src"
@@ -36,6 +39,129 @@ class TestTTLIndexes:
         content = setup_file.read_text()
         # The TTL index creation should reference working_memories
         assert "working_memories" in content and "expireAfterSeconds" in content
+
+
+class TestApprovalRequestIndexes:
+    """Issue #10 follow-up: approval requests need the compound access-path index."""
+
+    def test_setup_indexes_has_approval_request_compound_index(self):
+        """setup_indexes.py must create the approval request compound index."""
+        setup_file = SCRIPTS_DIR / "setup_indexes.py"
+        content = setup_file.read_text()
+        assert "approval_requests_agent_status_created_at" in content
+        assert '("agent_id", 1)' in content
+        assert '("status", 1)' in content
+        assert '("created_at", -1)' in content
+
+
+class TestNPlusOneRetrievalFixes:
+    """Issue #6: retrieval should use projected search docs instead of extra fetches."""
+
+    @staticmethod
+    def _search_result(document: dict, score: float = 0.92):
+        from src.retrieval.vector_search import SearchResult
+
+        return SearchResult(
+            id="memory-1",
+            content=document["content"],
+            metadata=document["metadata"],
+            score=score,
+            document=document,
+        )
+
+    @staticmethod
+    def _memory_doc(memory_type: str) -> dict:
+        return {
+            "_id": "memory-1",
+            "agent_id": "agent-1",
+            "user_id": "user-1",
+            "memory_type": memory_type,
+            "content": f"{memory_type} content",
+            "metadata": {"kind": memory_type},
+            "importance": 0.5,
+            "importance_level": "medium",
+        }
+
+    @pytest.mark.asyncio
+    async def test_episodic_retrieve_uses_projected_document(self):
+        from src.memory.episodic import EpisodicMemory
+
+        collection = AsyncMock()
+        collection.find_one = AsyncMock()
+
+        with (
+            patch("src.memory.episodic.VectorSearchEngine"),
+            patch("src.memory.episodic.get_embedding_service") as mock_embed,
+        ):
+            embed_instance = MagicMock()
+            embed_instance.generate_embedding = AsyncMock(
+                return_value=MagicMock(embedding=[0.1] * 1024)
+            )
+            mock_embed.return_value = embed_instance
+
+            store = EpisodicMemory(collection)
+            store.search_engine.hybrid_search = AsyncMock(
+                return_value=[self._search_result(self._memory_doc("episodic"))]
+            )
+
+            results = await store.retrieve("query", agent_id="agent-1")
+
+        assert len(results) == 1
+        collection.find_one.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_semantic_retrieve_uses_projected_document(self):
+        from src.memory.semantic import SemanticMemory
+
+        collection = AsyncMock()
+        collection.find_one = AsyncMock()
+
+        with (
+            patch("src.memory.semantic.VectorSearchEngine"),
+            patch("src.memory.semantic.get_embedding_service") as mock_embed,
+        ):
+            embed_instance = MagicMock()
+            embed_instance.generate_embedding = AsyncMock(
+                return_value=MagicMock(embedding=[0.1] * 1024)
+            )
+            mock_embed.return_value = embed_instance
+
+            store = SemanticMemory(collection)
+            store.search_engine.hybrid_search = AsyncMock(
+                return_value=[self._search_result(self._memory_doc("semantic"))]
+            )
+
+            results = await store.retrieve("query", agent_id="agent-1")
+
+        assert len(results) == 1
+        collection.find_one.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_procedural_retrieve_uses_projected_document(self):
+        from src.memory.procedural import ProceduralMemory
+
+        collection = AsyncMock()
+        collection.find_one = AsyncMock()
+
+        with (
+            patch("src.memory.procedural.VectorSearchEngine"),
+            patch("src.memory.procedural.get_embedding_service") as mock_embed,
+        ):
+            embed_instance = MagicMock()
+            embed_instance.generate_embedding = AsyncMock(
+                return_value=MagicMock(embedding=[0.1] * 1024)
+            )
+            mock_embed.return_value = embed_instance
+
+            store = ProceduralMemory(collection)
+            store.search_engine.hybrid_search = AsyncMock(
+                return_value=[self._search_result(self._memory_doc("procedural"))]
+            )
+
+            results = await store.retrieve("query", agent_id="agent-1")
+
+        assert len(results) == 1
+        collection.find_one.assert_not_awaited()
 
 
 class TestEmbeddingFieldUnification:

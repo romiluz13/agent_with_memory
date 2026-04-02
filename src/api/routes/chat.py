@@ -1,17 +1,14 @@
 """
-Chat Routes
-Handle conversations with agents
+Chat routes backed by the canonical LangGraph runtime.
 """
 
-import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-
-from .agents import active_agents
 
 router = APIRouter()
 
@@ -33,31 +30,39 @@ class ChatResponse(BaseModel):
     response: str
     agent_id: str
     conversation_id: str
+    thread_id: str
     timestamp: str
     metadata: dict[str, Any]
 
 
+class ConversationHistory(BaseModel):
+    """Model for conversation history."""
+
+    agent_id: str
+    thread_id: str
+    conversations: list[dict[str, Any]]
+    total_count: int
+
+
 @router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    """
-    Send a message to an agent and get a response.
-
-    Args:
-        request: Chat request parameters
-
-    Returns:
-        Agent response
-    """
-    # Check if agent exists
-    if request.agent_id not in active_agents:
+async def chat(request: ChatRequest, app_request: Request) -> ChatResponse:
+    """Send a message to an agent and get a response."""
+    registry = app_request.app.state.agent_registry
+    try:
+        agent = await registry.ensure_agent(request.agent_id)
+    except KeyError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {request.agent_id} not found"
-        )
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {request.agent_id} not found",
+        ) from exc
 
-    agent = active_agents[request.agent_id]
+    thread_id = agent.build_thread_id(
+        user_id=request.user_id,
+        session_id=request.session_id,
+        conversation_id=request.conversation_id,
+    )
 
     try:
-        # Get response from agent
         response = await agent.invoke(
             message=request.message,
             user_id=request.user_id,
@@ -65,70 +70,57 @@ async def chat(request: ChatRequest) -> ChatResponse:
             conversation_id=request.conversation_id,
         )
 
-        # Create conversation ID if not provided
-        conversation_id = request.conversation_id or f"conv_{agent.conversation_count}"
-
         return ChatResponse(
             response=response,
             agent_id=request.agent_id,
-            conversation_id=conversation_id,
+            conversation_id=agent.extract_conversation_id(thread_id),
+            thread_id=thread_id,
             timestamp=datetime.now(UTC).isoformat(),
             metadata={
                 "user_id": request.user_id,
                 "session_id": request.session_id,
-                "model": agent.config.model_name,
-                "temperature": agent.config.temperature,
+                "model": agent.model_name,
+                "provider": agent.model_provider,
+                "temperature": agent.temperature,
             },
         )
 
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Chat failed: {str(e)}"
-        ) from e
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Chat failed: {str(exc)}",
+        ) from exc
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatRequest):
-    """
-    Stream a chat response.
-
-    Args:
-        request: Chat request parameters
-
-    Returns:
-        Streaming response
-    """
-    # Check if agent exists
-    if request.agent_id not in active_agents:
+async def chat_stream(request: ChatRequest, app_request: Request):
+    """Stream actual graph execution events over SSE."""
+    registry = app_request.app.state.agent_registry
+    try:
+        agent = await registry.ensure_agent(request.agent_id)
+    except KeyError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {request.agent_id} not found"
-        )
-
-    agent = active_agents[request.agent_id]
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {request.agent_id} not found",
+        ) from exc
 
     async def generate():
-        """Generate streaming response."""
         try:
-            # This is a simplified streaming implementation
-            # In production, you would use the actual streaming from the LLM
-            response = await agent.invoke(
+            async for event in agent.stream_events(
                 message=request.message,
                 user_id=request.user_id,
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
-            )
-
-            # Simulate streaming by sending chunks
-            chunk_size = 20
-            for i in range(0, len(response), chunk_size):
-                chunk = response[i : i + chunk_size]
-                yield f"data: {chunk}\n\n"
-                await asyncio.sleep(0.05)  # Simulate processing time
-
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
             yield "data: [DONE]\n\n"
-
-        except Exception as e:
-            yield f"data: ERROR: {str(e)}\n\n"
+        except Exception as exc:
+            error_event = {
+                "type": "error",
+                "error": str(exc),
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -141,106 +133,84 @@ async def chat_stream(request: ChatRequest):
     )
 
 
-class ConversationHistory(BaseModel):
-    """Model for conversation history."""
-
-    agent_id: str
-    user_id: str
-    conversations: list[dict[str, Any]]
-    total_count: int
-
-
-@router.get("/history/{agent_id}/{user_id}", response_model=ConversationHistory)
+@router.get("/history/{agent_id}/{thread_id}", response_model=ConversationHistory)
 async def get_conversation_history(
-    agent_id: str, user_id: str, limit: int = 50, offset: int = 0, app_request: Request = None
+    agent_id: str,
+    thread_id: str,
+    app_request: Request,
+    limit: int = 50,
 ) -> ConversationHistory:
-    """
-    Get conversation history between an agent and user.
-
-    Args:
-        agent_id: Agent identifier
-        user_id: User identifier
-        limit: Maximum number of conversations
-        offset: Pagination offset
-        app_request: FastAPI request
-
-    Returns:
-        Conversation history
-    """
-    try:
-        # Get memory manager
-        memory_manager = app_request.app.state.memory_manager
-
-        # Get episodic memories (conversation history)
-        memories = await memory_manager.episodic.get_conversation_history(
-            agent_id=agent_id, user_id=user_id, limit=limit
+    """Get conversation history for a specific persisted thread."""
+    memory_manager = app_request.app.state.memory_manager
+    if memory_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory runtime is not configured",
         )
 
-        # Format conversations
-        conversations = []
-        for memory in memories:
-            conversations.append(
-                {
-                    "content": memory.content,
-                    "timestamp": memory.created_at.isoformat(),
-                    "importance": memory.importance,
-                    "metadata": memory.metadata,
-                }
-            )
+    try:
+        memories = await memory_manager.episodic.get_conversation_history(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            limit=limit,
+        )
+
+        conversations = [
+            {
+                "content": memory.content,
+                "timestamp": memory.created_at.isoformat(),
+                "importance": memory.importance,
+                "metadata": memory.metadata,
+            }
+            for memory in memories
+        ]
 
         return ConversationHistory(
             agent_id=agent_id,
-            user_id=user_id,
+            thread_id=thread_id,
             conversations=conversations,
             total_count=len(conversations),
         )
-
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get history: {str(e)}",
-        ) from e
+            detail=f"Failed to get history: {str(exc)}",
+        ) from exc
 
 
-@router.delete("/history/{agent_id}/{user_id}")
+@router.delete("/history/{agent_id}/{thread_id}")
 async def clear_conversation_history(
-    agent_id: str, user_id: str, app_request: Request
+    agent_id: str,
+    thread_id: str,
+    app_request: Request,
 ) -> dict[str, Any]:
-    """
-    Clear conversation history between an agent and user.
+    """Clear conversation history for a specific persisted thread."""
+    memory_manager = app_request.app.state.memory_manager
+    if memory_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory runtime is not configured",
+        )
 
-    Args:
-        agent_id: Agent identifier
-        user_id: User identifier
-        app_request: FastAPI request
-
-    Returns:
-        Deletion confirmation
-    """
     try:
-        # Get memory manager
-        memory_manager = app_request.app.state.memory_manager
-
-        # Clear episodic memories for this pair
         memories = await memory_manager.episodic.list_memories(
-            filters={"agent_id": agent_id, "user_id": user_id}
+            filters={"agent_id": agent_id, "metadata.thread_id": thread_id}
         )
 
         deleted_count = 0
         for memory in memories:
-            if await memory_manager.episodic.delete(memory.id):
+            if memory.id and await memory_manager.episodic.delete(memory.id):
                 deleted_count += 1
 
         return {
             "status": "cleared",
             "agent_id": agent_id,
-            "user_id": user_id,
+            "thread_id": thread_id,
             "deleted_count": deleted_count,
             "timestamp": datetime.now(UTC).isoformat(),
         }
-
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to clear history: {str(e)}",
-        ) from e
+            detail=f"Failed to clear history: {str(exc)}",
+        ) from exc

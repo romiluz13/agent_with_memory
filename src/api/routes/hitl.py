@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ class ApproveRejectResponse(BaseModel):
 @router.get("/pending/{agent_id}", response_model=PendingRequestsList)
 async def get_pending_requests(
     agent_id: str,
+    app_request: Request,
     limit: int = Query(default=50, ge=1, le=500),
 ):
     """Get pending approval requests for an agent.
@@ -68,20 +69,14 @@ async def get_pending_requests(
         List of pending approval requests
     """
     try:
-        import os
-
-        from motor.motor_asyncio import AsyncIOMotorClient
-
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
+        mongodb = app_request.app.state.mongodb_client
+        if mongodb is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="MongoDB not configured",
             )
 
-        client = AsyncIOMotorClient(uri)
-        db = client["ai_agent_boilerplate"]
-        collection = db["approval_requests"]
+        collection = mongodb.db["approval_requests"]
 
         # CRITICAL: Filter by agent_id for multi-tenant isolation
         cursor = (
@@ -103,9 +98,6 @@ async def get_pending_requests(
                     created_at=doc.get("created_at", ""),
                 )
             )
-
-        client.close()
-
         return PendingRequestsList(
             agent_id=agent_id,
             requests=requests,
@@ -125,6 +117,7 @@ async def get_pending_requests(
 @router.post("/approve/{request_id}", response_model=ApproveRejectResponse)
 async def approve_request(
     request_id: str,
+    app_request: Request,
     body: ApproveRejectRequest | None = None,
 ):
     """Approve a pending request.
@@ -137,20 +130,14 @@ async def approve_request(
         Updated request status
     """
     try:
-        import os
-
-        from motor.motor_asyncio import AsyncIOMotorClient
-
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
+        mongodb = app_request.app.state.mongodb_client
+        if mongodb is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="MongoDB not configured",
             )
 
-        client = AsyncIOMotorClient(uri)
-        db = client["ai_agent_boilerplate"]
-        collection = db["approval_requests"]
+        collection = mongodb.db["approval_requests"]
 
         feedback = body.feedback if body else None
 
@@ -164,9 +151,6 @@ async def approve_request(
                 }
             },
         )
-
-        client.close()
-
         if result.matched_count == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -192,6 +176,7 @@ async def approve_request(
 @router.post("/reject/{request_id}", response_model=ApproveRejectResponse)
 async def reject_request(
     request_id: str,
+    app_request: Request,
     body: ApproveRejectRequest | None = None,
 ):
     """Reject a pending request.
@@ -204,20 +189,14 @@ async def reject_request(
         Updated request status
     """
     try:
-        import os
-
-        from motor.motor_asyncio import AsyncIOMotorClient
-
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
+        mongodb = app_request.app.state.mongodb_client
+        if mongodb is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="MongoDB not configured",
             )
 
-        client = AsyncIOMotorClient(uri)
-        db = client["ai_agent_boilerplate"]
-        collection = db["approval_requests"]
+        collection = mongodb.db["approval_requests"]
 
         feedback = body.feedback if body else None
 
@@ -231,9 +210,6 @@ async def reject_request(
                 }
             },
         )
-
-        client.close()
-
         if result.matched_count == 0:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

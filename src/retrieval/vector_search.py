@@ -27,6 +27,28 @@ class SearchResult:
     metadata: dict[str, Any]
     score: float
     id: str | None = None
+    document: dict[str, Any] | None = None
+
+
+SEARCH_RESULT_SOURCE_PROJECTION = {
+    "_id": 1,
+    "agent_id": 1,
+    "user_id": 1,
+    "memory_type": 1,
+    "content": 1,
+    "metadata": 1,
+    "importance": 1,
+    "importance_level": 1,
+    "created_at": 1,
+    "updated_at": 1,
+    "accessed_at": 1,
+    "access_count": 1,
+    "ttl": 1,
+    "tags": 1,
+    "source": 1,
+    "confidence": 1,
+    "summary_id": 1,
+}
 
 
 class VectorSearchEngine:
@@ -38,6 +60,18 @@ class VectorSearchEngine:
     def __init__(self, collection: AsyncIOMotorCollection):
         """Initialize with MongoDB collection."""
         self.collection = collection
+
+    @staticmethod
+    def _search_result_from_doc(doc: dict[str, Any]) -> SearchResult:
+        """Build a SearchResult from an aggregated MongoDB document."""
+        projected_document = {key: value for key, value in doc.items() if key != "score"}
+        return SearchResult(
+            id=str(doc.get("_id")),
+            content=doc.get("content", ""),
+            metadata=doc.get("metadata", {}),
+            score=doc.get("score", 0.0),
+            document=projected_document,
+        )
 
     async def search(
         self,
@@ -90,9 +124,7 @@ class VectorSearchEngine:
             pipeline.append(
                 {
                     "$project": {
-                        "_id": 1,
-                        "content": 1,
-                        "metadata": 1,
+                        **SEARCH_RESULT_SOURCE_PROJECTION,
                         "score": {"$meta": "vectorSearchScore"},  # Similarity score
                     }
                 }
@@ -101,13 +133,7 @@ class VectorSearchEngine:
             # Execute search
             results = []
             async for doc in self.collection.aggregate(pipeline):
-                result = SearchResult(
-                    id=str(doc.get("_id")),
-                    content=doc.get("content", ""),
-                    metadata=doc.get("metadata", {}),
-                    score=doc.get("score", 0.0),
-                )
-                results.append(result)
+                results.append(self._search_result_from_doc(doc))
 
             logger.debug(
                 f"Vector search returned {len(results)} results (numCandidates={actual_num_candidates})"
@@ -126,7 +152,7 @@ class VectorSearchEngine:
         vector_weight: float = 0.5,
         text_weight: float = 0.5,
         filter_query: dict[str, Any] | None = None,
-        num_candidates: int = 100,
+        num_candidates: int | None = None,
         index_name: str = "vector_index",
         text_index_name: str = "text_search_index",
     ) -> list[SearchResult]:
@@ -151,6 +177,12 @@ class VectorSearchEngine:
             Combined search results sorted by fused score
         """
         try:
+            actual_num_candidates = (
+                num_candidates
+                if num_candidates is not None
+                else (limit * NUM_CANDIDATES_MULTIPLIER)
+            )
+
             # Build vector search pipeline (matches GenAI-Showcase pattern)
             vector_pipeline = [
                 {
@@ -158,7 +190,7 @@ class VectorSearchEngine:
                         "index": index_name,
                         "path": "embedding",
                         "queryVector": query_embedding,
-                        "numCandidates": num_candidates,
+                        "numCandidates": actual_num_candidates,
                         "limit": limit,
                     }
                 }
@@ -209,9 +241,7 @@ class VectorSearchEngine:
                 {"$limit": limit},
                 {
                     "$project": {
-                        "_id": 1,
-                        "content": 1,
-                        "metadata": 1,
+                        **SEARCH_RESULT_SOURCE_PROJECTION,
                         "score": 1,
                     }
                 },
@@ -220,13 +250,7 @@ class VectorSearchEngine:
             # Execute hybrid search
             results = []
             async for doc in self.collection.aggregate(pipeline):
-                result = SearchResult(
-                    id=str(doc.get("_id")),
-                    content=doc.get("content", ""),
-                    metadata=doc.get("metadata", {}),
-                    score=doc.get("score", 0.0),
-                )
-                results.append(result)
+                results.append(self._search_result_from_doc(doc))
 
             logger.debug(f"Hybrid search returned {len(results)} results")
             return results
@@ -238,7 +262,7 @@ class VectorSearchEngine:
             return await self.search(
                 query_embedding=query_embedding,
                 limit=limit,
-                num_candidates=num_candidates,
+                num_candidates=actual_num_candidates,
                 filter_query=filter_query,
                 index_name=index_name,
             )

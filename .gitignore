@@ -189,3 +189,6 @@ tests/integration/test_focused_debug.py
 
 # MongoDB GenAI-Showcase reference (cloned for hybrid search patterns)
 .genai-showcase/
+
+# Internal roadmap (not for public repo)
+roadmap.md

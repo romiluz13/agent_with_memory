@@ -25,7 +25,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 logger = logging.getLogger(__name__)
 
 # Operators forbidden in generated queries for security
-FORBIDDEN_OPERATORS = {"$where", "$function", "$accumulator"}
+FORBIDDEN_OPERATORS = {"$where", "$function", "$accumulator", "$merge", "$out"}
 
 
 class NLToMQLGenerator:
@@ -78,6 +78,7 @@ Return ONLY JSON: {{"collection": "<name>", "filter": {{}}, "projection": {{}}, 
         question: str,
         agent_id: str,
         llm: Any = None,
+        collection_name: str | None = None,
     ) -> dict[str, Any]:
         """Convert natural language to MongoDB query with agent_id scoping.
 
@@ -103,8 +104,15 @@ Return ONLY JSON: {{"collection": "<name>", "filter": {{}}, "projection": {{}}, 
         start_time = time.monotonic()
 
         try:
-            # Determine target collection from question context
-            target_collection = self._allowed_collections[0]  # Default
+            # Respect explicit collection choice when provided, otherwise default to
+            # the first allowlisted collection for a safe bounded query surface.
+            target_collection = collection_name or self._allowed_collections[0]
+            if target_collection not in self._allowed_collections:
+                return {
+                    "error": f"Collection '{target_collection}' not in allowlist",
+                    "results": [],
+                    "execution_time": time.monotonic() - start_time,
+                }
 
             # Get schema context
             schema_context = await self._get_schema_context(target_collection)
@@ -122,13 +130,18 @@ Return ONLY JSON: {{"collection": "<name>", "filter": {{}}, "projection": {{}}, 
             query_spec = self._parse_json_response(response.content)
 
             # Validate collection
-            collection_name = query_spec.get("collection", "")
-            if collection_name not in self._allowed_collections:
+            generated_collection_name = query_spec.get("collection", "")
+            if generated_collection_name not in self._allowed_collections:
                 return {
-                    "error": f"Collection '{collection_name}' not in allowlist",
+                    "error": f"Collection '{generated_collection_name}' not in allowlist",
                     "results": [],
                     "execution_time": time.monotonic() - start_time,
                 }
+
+            # Keep the query on the explicitly chosen collection when the caller
+            # requested one. This avoids cross-collection surprises at execution time.
+            if collection_name:
+                generated_collection_name = collection_name
 
             # Validate filter for forbidden operators
             filter_query = query_spec.get("filter", {})
@@ -144,7 +157,7 @@ Return ONLY JSON: {{"collection": "<name>", "filter": {{}}, "projection": {{}}, 
             filter_query["agent_id"] = agent_id
 
             # Execute query via Motor async
-            collection = self._db[collection_name]
+            collection = self._db[generated_collection_name]
             limit = min(query_spec.get("limit", 10), 100)  # Cap at 100
             projection = query_spec.get("projection")
 
@@ -160,7 +173,7 @@ Return ONLY JSON: {{"collection": "<name>", "filter": {{}}, "projection": {{}}, 
 
             return {
                 "generated_mql": {
-                    "collection": collection_name,
+                    "collection": generated_collection_name,
                     "filter": filter_query,
                     "projection": projection,
                     "limit": limit,

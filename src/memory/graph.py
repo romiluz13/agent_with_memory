@@ -65,6 +65,7 @@ class GraphMemory:
         "If no relationships found, return: []\n\n"
         'Text: "{text}"'
     )
+    MAX_RELATIONSHIPS_PER_ENTITY = 50
 
     def __init__(self, db: AsyncIOMotorDatabase, entity_memory: EntityMemory):
         """Initialize GraphMemory.
@@ -100,14 +101,22 @@ class GraphMemory:
             logger.warning(f"Source entity not found: {relationship.source_entity}")
             return False
 
-        # Add relationship to source entity's metadata using $addToSet
+        relationship_doc = {
+            "target": relationship.target_entity,
+            "type": relationship.relationship_type,
+        }
+        existing_relationships = source.get("metadata", {}).get("relationships", [])
+        if relationship_doc in existing_relationships:
+            return True
+
+        # Cap the relationship list to avoid an unbounded array growth pattern.
         result = await self.collection.update_one(
             {"_id": source["_id"]},
             {
-                "$addToSet": {
+                "$push": {
                     "metadata.relationships": {
-                        "target": relationship.target_entity,
-                        "type": relationship.relationship_type,
+                        "$each": [relationship_doc],
+                        "$slice": -self.MAX_RELATIONSHIPS_PER_ENTITY,
                     }
                 }
             },
@@ -257,9 +266,7 @@ class GraphMemory:
             Reranked search results
         """
         embedding_service = get_embedding_service()
-        embedding_result = await embedding_service.generate_embedding(
-            query, input_type="query"
-        )
+        embedding_result = await embedding_service.generate_embedding(query, input_type="query")
 
         vector_results = await self.search_engine.hybrid_search(
             query_text=query,
@@ -270,9 +277,7 @@ class GraphMemory:
 
         # Extract entities mentioned in the query
         query_entities: set[str] = set()
-        async for doc in self.collection.find(
-            {"agent_id": agent_id}, {"metadata.entity_name": 1}
-        ):
+        async for doc in self.collection.find({"agent_id": agent_id}, {"metadata.entity_name": 1}):
             name = doc.get("metadata", {}).get("entity_name", "")
             if name and name.lower() in query.lower():
                 query_entities.add(name)

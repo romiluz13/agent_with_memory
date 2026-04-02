@@ -6,7 +6,7 @@ A helper class to make agent creation even simpler
 import os
 from typing import Any
 
-from langchain.agents import tool
+from langchain_core.tools import tool
 
 from src.core.agent_langgraph import MongoDBLangGraphAgent
 
@@ -19,9 +19,7 @@ class AgentBuilder:
 
     @staticmethod
     def create_customer_support_agent(
-        company_name: str,
-        custom_tools: list | None = None,
-        mongodb_uri: str | None = None
+        company_name: str, custom_tools: list | None = None, mongodb_uri: str | None = None
     ) -> MongoDBLangGraphAgent:
         """Create a pre-configured customer support agent."""
 
@@ -39,7 +37,7 @@ class AgentBuilder:
             agent_name=f"{company_name.lower()}_support",
             system_prompt=prompt,
             user_tools=custom_tools or [],
-            database_name=f"{company_name.lower()}_agent"
+            database_name=f"{company_name.lower()}_agent",
         )
 
     @staticmethod
@@ -47,7 +45,7 @@ class AgentBuilder:
         company_name: str,
         product_catalog: dict[str, Any] | None = None,
         custom_tools: list | None = None,
-        mongodb_uri: str | None = None
+        mongodb_uri: str | None = None,
     ) -> MongoDBLangGraphAgent:
         """Create a pre-configured sales agent."""
 
@@ -63,6 +61,7 @@ class AgentBuilder:
         # Auto-create product lookup tool if catalog provided
         tools = custom_tools or []
         if product_catalog:
+
             @tool
             def lookup_product(product_name: str) -> str:
                 """Look up product details from catalog."""
@@ -78,14 +77,12 @@ class AgentBuilder:
             agent_name=f"{company_name.lower()}_sales",
             system_prompt=prompt,
             user_tools=tools,
-            database_name=f"{company_name.lower()}_agent"
+            database_name=f"{company_name.lower()}_agent",
         )
 
     @staticmethod
     def create_research_agent(
-        research_domain: str,
-        custom_tools: list | None = None,
-        mongodb_uri: str | None = None
+        research_domain: str, custom_tools: list | None = None, mongodb_uri: str | None = None
     ) -> MongoDBLangGraphAgent:
         """Create a pre-configured research assistant."""
 
@@ -103,7 +100,7 @@ class AgentBuilder:
             agent_name=f"{research_domain.lower()}_research",
             system_prompt=prompt,
             user_tools=custom_tools or [],
-            database_name=f"{research_domain.lower()}_research"
+            database_name=f"{research_domain.lower()}_research",
         )
 
     @staticmethod
@@ -111,13 +108,15 @@ class AgentBuilder:
         user_name: str,
         preferences: dict[str, str] | None = None,
         custom_tools: list | None = None,
-        mongodb_uri: str | None = None
+        mongodb_uri: str | None = None,
     ) -> MongoDBLangGraphAgent:
         """Create a personalized AI assistant."""
 
         pref_text = ""
         if preferences:
-            pref_text = f"User preferences: {', '.join([f'{k}: {v}' for k, v in preferences.items()])}"
+            pref_text = (
+                f"User preferences: {', '.join([f'{k}: {v}' for k, v in preferences.items()])}"
+            )
 
         prompt = f"""
         You are {user_name}'s personal AI assistant.
@@ -133,13 +132,14 @@ class AgentBuilder:
             agent_name=f"{user_name.lower()}_assistant",
             system_prompt=prompt,
             user_tools=custom_tools or [],
-            database_name=f"{user_name.lower()}_personal"
+            database_name=f"{user_name.lower()}_personal",
         )
 
 
 # Example usage
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
 
     # Create a support agent in ONE LINE!
@@ -151,8 +151,8 @@ if __name__ == "__main__":
         product_catalog={
             "Laptop Pro X1": "$1299 - High-performance laptop",
             "SmartPhone Z": "$799 - Latest smartphone",
-            "Tablet Plus": "$499 - Professional tablet"
-        }
+            "Tablet Plus": "$499 - Professional tablet",
+        },
     )
 
     # Create a research agent
@@ -160,8 +160,7 @@ if __name__ == "__main__":
 
     # Create a personal assistant
     personal_agent = AgentBuilder.create_personal_assistant(
-        "John",
-        preferences={"communication": "concise", "tone": "professional"}
+        "John", preferences={"communication": "concise", "tone": "professional"}
     )
 
     print("✅ All agents created successfully!")

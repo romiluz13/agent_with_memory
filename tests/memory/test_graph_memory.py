@@ -46,9 +46,7 @@ class TestAddRelationship:
                 "agent_id": "agent_1",
             }
         )
-        graph_memory.collection.update_one = AsyncMock(
-            return_value=MagicMock(modified_count=1)
-        )
+        graph_memory.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
         rel = Relationship(
             source_entity="John",
@@ -80,14 +78,12 @@ class TestAddRelationship:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_add_relationship_uses_addToSet(self, graph_memory):
-        """Verify $addToSet is used to prevent duplicate relationships."""
+    async def test_add_relationship_uses_bounded_push(self, graph_memory):
+        """Verify relationship updates are capped to avoid unbounded arrays."""
         graph_memory.collection.find_one = AsyncMock(
             return_value={"_id": "source_id", "metadata": {"entity_name": "John"}, "agent_id": "a1"}
         )
-        graph_memory.collection.update_one = AsyncMock(
-            return_value=MagicMock(modified_count=1)
-        )
+        graph_memory.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
         rel = Relationship(
             source_entity="John",
@@ -99,8 +95,38 @@ class TestAddRelationship:
 
         update_call = graph_memory.collection.update_one.call_args
         update_doc = update_call[0][1]
-        assert "$addToSet" in update_doc
-        assert "metadata.relationships" in update_doc["$addToSet"]
+        assert "$push" in update_doc
+        assert "metadata.relationships" in update_doc["$push"]
+        assert update_doc["$push"]["metadata.relationships"]["$slice"] == (
+            -graph_memory.MAX_RELATIONSHIPS_PER_ENTITY
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_relationship_skips_duplicates(self, graph_memory):
+        """Duplicate relationships should not trigger another write."""
+        graph_memory.collection.find_one = AsyncMock(
+            return_value={
+                "_id": "source_id",
+                "metadata": {
+                    "entity_name": "John",
+                    "relationships": [{"target": "Acme", "type": "WORKS_AT"}],
+                },
+                "agent_id": "a1",
+            }
+        )
+        graph_memory.collection.update_one = AsyncMock()
+
+        rel = Relationship(
+            source_entity="John",
+            target_entity="Acme",
+            relationship_type="WORKS_AT",
+            agent_id="a1",
+        )
+
+        result = await graph_memory.add_relationship(rel)
+
+        assert result is True
+        graph_memory.collection.update_one.assert_not_awaited()
 
 
 class TestGraphLookup:
@@ -119,9 +145,7 @@ class TestGraphLookup:
 
         graph_memory.collection.aggregate = mock_aggregate
 
-        await graph_memory.graph_lookup(
-            start_entity="John", agent_id="agent_1", max_depth=2
-        )
+        await graph_memory.graph_lookup(start_entity="John", agent_id="agent_1", max_depth=2)
 
         assert captured_pipeline is not None
 
@@ -155,9 +179,7 @@ class TestGraphLookup:
 
         graph_memory.collection.aggregate = mock_aggregate
 
-        await graph_memory.graph_lookup(
-            start_entity="John", agent_id="agent_42", max_depth=1
-        )
+        await graph_memory.graph_lookup(start_entity="John", agent_id="agent_42", max_depth=1)
 
         gl = captured_pipeline[1]["$graphLookup"]
         assert "restrictSearchWithMatch" in gl
@@ -170,9 +192,7 @@ class TestGraphLookup:
             "entity_name": "John",
             "entity_type": "PERSON",
             "relationships": [{"target": "Acme", "type": "WORKS_AT"}],
-            "connected_entities": [
-                {"name": "Acme", "type": "ORGANIZATION", "depth": 0}
-            ],
+            "connected_entities": [{"name": "Acme", "type": "ORGANIZATION", "depth": 0}],
         }
 
         def mock_aggregate(pipeline):
@@ -180,9 +200,7 @@ class TestGraphLookup:
 
         graph_memory.collection.aggregate = mock_aggregate
 
-        results = await graph_memory.graph_lookup(
-            start_entity="John", agent_id="agent_1"
-        )
+        results = await graph_memory.graph_lookup(start_entity="John", agent_id="agent_1")
 
         assert len(results) == 1
         assert results[0]["entity_name"] == "John"
@@ -209,9 +227,7 @@ class TestExtractAndStoreRelationships:
                 "agent_id": "agent_1",
             }
         )
-        graph_memory.collection.update_one = AsyncMock(
-            return_value=MagicMock(modified_count=1)
-        )
+        graph_memory.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
         result = await graph_memory.extract_and_store_relationships(
             text="John works at Acme Corp in New York.",
@@ -270,9 +286,11 @@ class TestEntityBoostedSearch:
 
         # Mock entity lookup - "John" is an entity
         def mock_find(query, projection):
-            return AsyncIteratorMock([
-                {"metadata": {"entity_name": "John"}},
-            ])
+            return AsyncIteratorMock(
+                [
+                    {"metadata": {"entity_name": "John"}},
+                ]
+            )
 
         graph_memory.collection.find = mock_find
 

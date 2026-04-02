@@ -59,10 +59,8 @@ def reciprocal_rank_fusion(
     if weights is None:
         weights = dict.fromkeys(result_lists.keys(), 1.0)
 
-    # Normalize weights
-    total_weight = sum(weights.values())
-    if total_weight > 0:
-        weights = {name: w / total_weight for name, w in weights.items()}
+    # Apply weights directly without normalization to match native $rankFusion behavior.
+    # MongoDB's $rankFusion applies weights as-is (lower number = higher weight).
 
     # Track RRF scores and best result for each ID
     rrf_scores: dict[str, float] = {}
@@ -72,7 +70,7 @@ def reciprocal_rank_fusion(
     for source_name, results in result_lists.items():
         source_weight = weights.get(source_name, 1.0)
 
-        for rank, result in enumerate(results):
+        for rank, result in enumerate(results, start=1):
             result_id = result.id
 
             # RRF contribution for this source

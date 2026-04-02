@@ -289,7 +289,10 @@ async def consolidate_memories(
 
 @router.delete("/{memory_type}/{memory_id}")
 async def delete_memory(
-    memory_type: MemoryType, memory_id: str, app_request: Request
+    memory_type: MemoryType,
+    memory_id: str,
+    app_request: Request,
+    agent_id: str = Query(..., description="Owning agent ID"),
 ) -> dict[str, str]:
     """
     Delete a specific memory.
@@ -306,8 +309,20 @@ async def delete_memory(
         # Get memory manager
         memory_manager = app_request.app.state.memory_manager
 
-        # Delete memory
         store = memory_manager.stores[memory_type]
+        memory = await store.get_by_id(memory_id)
+
+        if memory is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Memory {memory_id} not found"
+            )
+
+        if memory.agent_id != agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Memory ownership check failed",
+            )
+
         success = await store.delete(memory_id)
 
         if not success:
@@ -319,6 +334,7 @@ async def delete_memory(
             "status": "deleted",
             "memory_id": memory_id,
             "memory_type": memory_type.value,
+            "agent_id": agent_id,
             "timestamp": datetime.now(UTC).isoformat(),
         }
 

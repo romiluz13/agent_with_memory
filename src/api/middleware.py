@@ -4,13 +4,14 @@ Authentication, logging, and request processing
 """
 
 import logging
+import os
 import time
 from datetime import UTC, datetime
 
-import jwt
 from fastapi import HTTPException, Request, status
+from jose import JWTError, jwt
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         """Check authentication for protected routes."""
+        # NOTE: Defaults to disabled for development. For production deployments,
+        # set AUTH_REQUIRED=true to enforce authentication on all non-public endpoints.
+        auth_required = os.getenv("AUTH_REQUIRED", "false").lower() in {"1", "true", "yes", "on"}
+
         # Skip auth for public paths
         if request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
@@ -87,12 +92,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 request.state.authenticated = True
                 return await call_next(request)
 
-        # Allow unauthenticated access for now (remove in production)
-        # In production, uncomment the following lines:
-        # raise HTTPException(
-        #     status_code=status.HTTP_401_UNAUTHORIZED,
-        #     detail="Authentication required"
-        # )
+        if auth_required:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+            )
 
         request.state.auth_type = "none"
         request.state.authenticated = False
@@ -104,28 +108,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
         In production, check against database.
         """
         # Simplified validation
-        import os
-
         valid_keys = os.getenv("VALID_API_KEYS", "").split(",")
-        return api_key in valid_keys if valid_keys else True
+        valid_keys = [key.strip() for key in valid_keys if key.strip()]
+        return api_key in valid_keys if valid_keys else False
 
     def _validate_jwt(self, token: str) -> bool:
         """
         Validate JWT token.
         """
         try:
-            import os
-
-            secret = os.getenv("JWT_SECRET_KEY", "your-secret-key")
+            secret = os.getenv("JWT_SECRET_KEY")
+            if not secret:
+                logger.warning("JWT presented but JWT_SECRET_KEY is not configured")
+                return False
             payload = jwt.decode(token, secret, algorithms=["HS256"])
 
             # Check expiration
             if "exp" in payload:
-                if datetime.fromtimestamp(payload["exp"]) < datetime.now(UTC):
+                if datetime.fromtimestamp(payload["exp"], tz=UTC) < datetime.now(UTC):
                     return False
 
             return True
-        except jwt.InvalidTokenError:
+        except JWTError:
             return False
 
 
@@ -187,7 +191,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def _cleanup_old_entries(self, current_window: int):
         """Remove old rate limit entries."""
         old_windows = [
-            key for key in self.request_counts if int(key.split(":")[1]) < current_window - 1
+            key for key in self.request_counts if int(key.rsplit(":", 1)[1]) < current_window - 1
         ]
         for key in old_windows:
             del self.request_counts[key]
@@ -209,11 +213,10 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
             logger.error(f"Unexpected error: {e}", exc_info=True)
 
             # Return generic error response
-            return Response(
+            return JSONResponse(
                 content={
                     "error": "Internal server error",
                     "message": str(e) if logger.level == logging.DEBUG else "An error occurred",
                 },
                 status_code=500,
-                media_type="application/json",
             )

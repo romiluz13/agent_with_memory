@@ -12,8 +12,9 @@ from typing import Any
 import tiktoken
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_voyageai import VoyageAIEmbeddings
 from pymongo import MongoClient
+
+from ..embeddings.langchain_voyage import VoyageEmbeddingsAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ class MongoDBDocumentIngestion:
         self.collection = self.db[collection_name]
 
         # Initialize embeddings
-        self.embedding_model = VoyageAIEmbeddings(
+        self.embedding_model = VoyageEmbeddingsAdapter(
             model=self.config.embedding_model, output_dimension=self.config.embedding_dimensions
         )
 

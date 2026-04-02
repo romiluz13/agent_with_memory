@@ -1,206 +1,213 @@
 """
-FastAPI Main Application
-Production-ready API for AI Agent Boilerplate
+FastAPI application entrypoint for AWM 2.0.
 """
 
-import importlib.util as _ilu
-import os
-import pathlib as _pathlib
+import logging
 from contextlib import asynccontextmanager
-from typing import Any
+from datetime import UTC, datetime
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# Load environment variables
+from src.api.middleware import (
+    AuthMiddleware,
+    ErrorHandlingMiddleware,
+    LoggingMiddleware,
+    RateLimitMiddleware,
+)
+from src.api.routes import agents, chat, evaluation, health, hitl, memories, nl_query, time_travel
+from src.api.runtime import RuntimeSettings, initialize_runtime, shutdown_runtime
+
 load_dotenv()
 
-
-# Request/Response models
-class HealthResponse(BaseModel):
-    status: str
-    version: str
-    services: dict[str, str]
+logger = logging.getLogger(__name__)
+bootstrap_settings = RuntimeSettings.from_env()
 
 
-class ChatRequest(BaseModel):
+class LegacyChatRequest(BaseModel):
+    """Compatibility request model for the legacy /chat endpoint."""
+
     message: str
     session_id: str = "default"
     user_id: str = "anonymous"
 
 
-class ChatResponse(BaseModel):
+class LegacyChatResponse(BaseModel):
+    """Compatibility response model for the legacy /chat endpoint."""
+
     response: str
     session_id: str
     tokens_used: int = 0
 
 
-# Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle."""
-    # Startup
-    print("🚀 Starting AI Agent Boilerplate API...")
+    runtime = await initialize_runtime()
+    app.state.runtime = runtime
+    app.state.settings = runtime.settings
+    app.state.mongodb_client = runtime.mongodb
+    app.state.sync_mongo_client = runtime.sync_mongo_client
+    app.state.memory_manager = runtime.memory_manager
+    app.state.agent_registry = runtime.agent_registry
+    app.state.websocket_manager = runtime.websocket_manager
+    app.state.nl_query_generator = runtime.nl_query_generator
+    app.state.started_at = datetime.now(UTC)
 
-    # Initialize services here if needed
+    logger.info(
+        "Started AWM 2.0 API (lane=%s, db=%s, mongodb_ready=%s)",
+        runtime.settings.validation_lane,
+        runtime.settings.database_name,
+        runtime.memory_manager is not None,
+    )
 
     yield
 
-    # Shutdown
-    print("👋 Shutting down AI Agent Boilerplate API...")
+    await shutdown_runtime(runtime)
+    logger.info("Stopped AWM 2.0 API")
 
 
-# Create FastAPI app
 app = FastAPI(
-    title="AI Agent Boilerplate API",
-    description="Production-ready AI agent with sophisticated memory system",
-    version="0.1.0",
+    title="Agent With Memory 2.0 API",
+    description="Production-oriented AI agent starter with multi-layer memory and MongoDB",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
-# Configure CORS
+app.add_middleware(ErrorHandlingMiddleware)
+app.add_middleware(LoggingMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=bootstrap_settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
-
-# --- Route Registration (new feature routes) ---
-# NOTE: Existing routes (/health, /chat, /api/v1/agents) remain inline below.
-# New feature routes are registered via include_router() here.
-# To register a new route file:
-#   1. Create src/api/routes/<feature>.py with `router = APIRouter()`
-#   2. Add include_router() call here with appropriate prefix and tags
-#
-# Registered dynamically by each phase when route files are created:
-
-# Import feature routes directly from file to avoid triggering
-# src.api.routes.__init__ which eagerly imports modules with uninstalled
-# dependencies (langchain_mcp_adapters in agents.py).
-_eval_spec = _ilu.spec_from_file_location(
-    "src.api.routes.evaluation",
-    _pathlib.Path(__file__).parent / "routes" / "evaluation.py",
-)
-_eval_mod = _ilu.module_from_spec(_eval_spec)
-_eval_spec.loader.exec_module(_eval_mod)
-app.include_router(_eval_mod.router, prefix="/api/v1/evaluate", tags=["evaluation"])
-
-_nlq_spec = _ilu.spec_from_file_location(
-    "src.api.routes.nl_query",
-    _pathlib.Path(__file__).parent / "routes" / "nl_query.py",
-)
-_nlq_mod = _ilu.module_from_spec(_nlq_spec)
-_nlq_spec.loader.exec_module(_nlq_mod)
-app.include_router(_nlq_mod.router, prefix="/api/v1/query", tags=["nl-query"])
-
-_hitl_spec = _ilu.spec_from_file_location(
-    "src.api.routes.hitl",
-    _pathlib.Path(__file__).parent / "routes" / "hitl.py",
-)
-_hitl_mod = _ilu.module_from_spec(_hitl_spec)
-_hitl_spec.loader.exec_module(_hitl_mod)
-app.include_router(_hitl_mod.router, prefix="/api/v1/hitl", tags=["hitl"])
-
-_tt_spec = _ilu.spec_from_file_location(
-    "src.api.routes.time_travel",
-    _pathlib.Path(__file__).parent / "routes" / "time_travel.py",
-)
-_tt_mod = _ilu.module_from_spec(_tt_spec)
-_tt_spec.loader.exec_module(_tt_mod)
-app.include_router(_tt_mod.router, prefix="/api/v1/time-travel", tags=["time-travel"])
+app.include_router(health.router, prefix="/health", tags=["health"])
+app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
+app.include_router(memories.router, prefix="/api/v1/memories", tags=["memories"])
+app.include_router(nl_query.router, prefix="/api/v1/query", tags=["nl-query"])
+app.include_router(hitl.router, prefix="/api/v1/hitl", tags=["hitl"])
+app.include_router(time_travel.router, prefix="/api/v1/time-travel", tags=["time-travel"])
+app.include_router(evaluation.router, prefix="/api/v1/evaluate", tags=["evaluation"])
 
 
 @app.get("/", response_model=dict[str, str])
-async def root():
+async def root() -> dict[str, str]:
     """Root endpoint."""
-    return {"name": "AI Agent Boilerplate", "version": "0.1.0", "status": "operational"}
-
-
-@app.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Health check endpoint."""
-    # Check service status
-    services = {}
-
-    # MongoDB -- use public health_check() API
-    # mongodb-connection: "Health checks should use public APIs, not private members"
-    try:
-        from src.storage.mongodb_client import mongodb_client
-
-        result = await mongodb_client.health_check()
-        if result.get("status") == "healthy":
-            services["mongodb"] = "healthy"
-        else:
-            services["mongodb"] = "not_initialized"
-    except Exception:
-        services["mongodb"] = "unhealthy"
-
-    # Voyage AI
-    services["voyage_ai"] = "configured" if os.getenv("VOYAGE_API_KEY") else "not_configured"
-
-    # OpenAI
-    services["openai"] = "configured" if os.getenv("OPENAI_API_KEY") else "not_configured"
-
-    # Galileo
-    services["galileo"] = "configured" if os.getenv("GALILEO_API_KEY") else "not_configured"
-
-    return HealthResponse(
-        status=(
-            "healthy"
-            if all(v in ["healthy", "configured"] for v in services.values())
-            else "degraded"
-        ),
-        version="0.1.0",
-        services=services,
-    )
-
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """Chat with the AI agent."""
-    try:
-        # For now, return a simple echo response
-        # In production, this would call the actual agent
-        response = f"Echo: {request.message}"
-
-        return ChatResponse(
-            response=response,
-            session_id=request.session_id,
-            tokens_used=len(request.message.split()),
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
-
-@app.get("/api/v1/agents", response_model=dict[str, Any])
-async def list_agents():
-    """List available agents."""
     return {
-        "agents": [
-            {
-                "id": "assistant",
-                "name": "General Assistant",
-                "description": "General-purpose AI assistant with memory",
-                "capabilities": ["chat", "memory", "tools"],
-            },
-            {
-                "id": "research",
-                "name": "Research Agent",
-                "description": "Specialized in research and analysis",
-                "capabilities": ["research", "analysis", "memory"],
-            },
-        ]
+        "name": "Agent With Memory 2.0",
+        "version": "0.2.0",
+        "status": "operational",
     }
 
 
-# Error handlers
+@app.get("/health", response_model=dict[str, str])
+async def legacy_health() -> dict[str, str]:
+    """Compatibility health endpoint without redirect semantics."""
+    return {
+        "status": "healthy",
+        "service": "Agent With Memory 2.0",
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+
+
+@app.post("/chat", response_model=LegacyChatResponse)
+async def legacy_chat(request: LegacyChatRequest) -> LegacyChatResponse:
+    """Compatibility endpoint backed by the real assistant runtime."""
+    runtime = app.state.runtime
+    if runtime.memory_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail=runtime.startup_error or "MongoDB runtime is not configured",
+        )
+
+    agent = await runtime.agent_registry.ensure_agent("assistant")
+    response = await agent.invoke(
+        message=request.message,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        conversation_id=request.session_id,
+    )
+
+    return LegacyChatResponse(
+        response=response,
+        session_id=request.session_id,
+        tokens_used=len(response.split()),
+    )
+
+
+@app.websocket("/api/v1/ws/{agent_id}")
+async def websocket_chat(
+    websocket: WebSocket,
+    agent_id: str,
+):
+    """Bidirectional chat over WebSocket using the canonical agent runtime."""
+    runtime = app.state.runtime
+    manager = runtime.websocket_manager
+
+    user_id = websocket.query_params.get("user_id") or f"ws-{datetime.now(UTC).timestamp()}"
+    session_id = websocket.query_params.get("session_id")
+    conversation_id = websocket.query_params.get("conversation_id")
+
+    await manager.connect(websocket, agent_id=agent_id, user_id=user_id)
+
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            message = payload.get("message")
+            if not message:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "error": "message is required",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+                continue
+
+            try:
+                agent = await runtime.agent_registry.ensure_agent(agent_id)
+            except KeyError as exc:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "error": f"Agent {agent_id} not found",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                )
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+            async for event in agent.stream_events(
+                message=message,
+                user_id=user_id,
+                session_id=session_id or payload.get("session_id"),
+                conversation_id=conversation_id or payload.get("conversation_id"),
+            ):
+                await websocket.send_json(event)
+
+    except WebSocketDisconnect:
+        manager.disconnect(agent_id, user_id)
+    except Exception as exc:
+        logger.exception("WebSocket chat failed")
+        if websocket.client_state.name == "CONNECTED":
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "error": str(exc),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            )
+        manager.disconnect(agent_id, user_id)
+
+
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     """Handle 404 errors."""

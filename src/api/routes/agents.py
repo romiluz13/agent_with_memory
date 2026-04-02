@@ -1,6 +1,5 @@
 """
-Agent Management Routes
-Create, configure, and manage agents
+Agent management routes backed by the canonical LangGraph registry.
 """
 
 from datetime import UTC, datetime
@@ -9,13 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from ...core.agent import AgentConfig, BaseAgent
-from ...memory.manager import MemoryManager
-
 router = APIRouter()
-
-# In-memory agent storage (in production, use database)
-active_agents: dict[str, BaseAgent] = {}
 
 
 class CreateAgentRequest(BaseModel):
@@ -26,9 +19,19 @@ class CreateAgentRequest(BaseModel):
     model_provider: str = Field(default="openai", description="LLM provider")
     model_name: str = Field(default="gpt-4o", description="Model name")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=2000, ge=1, le=8000)
+    max_tokens: int = Field(default=2000, ge=1, le=32000)
     system_prompt: str | None = Field(default=None, description="Custom system prompt")
     enable_streaming: bool = Field(default=True)
+    database_name: str | None = Field(default=None, description="Optional database override")
+
+
+class UpdateAgentRequest(BaseModel):
+    """Update model for mutable agent config."""
+
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=32000)
+    system_prompt: str | None = Field(default=None)
+    enable_streaming: bool | None = Field(default=None)
 
 
 class AgentResponse(BaseModel):
@@ -42,195 +45,81 @@ class AgentResponse(BaseModel):
     metadata: dict[str, Any]
 
 
-@router.post("/", response_model=AgentResponse)
-async def create_agent(request: CreateAgentRequest, app_request: Request) -> AgentResponse:
-    """
-    Create a new agent instance.
-
-    Args:
-        request: Agent creation parameters
-        app_request: FastAPI request object
-
-    Returns:
-        Created agent details
-    """
-    try:
-        # Get memory manager from app state
-        memory_manager: MemoryManager = app_request.app.state.memory_manager
-
-        # Create agent configuration
-        config = AgentConfig(
-            name=request.name,
-            description=request.description,
-            model_provider=request.model_provider,
-            model_name=request.model_name,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            system_prompt=request.system_prompt,
-            enable_streaming=request.enable_streaming,
-        )
-
-        # Create agent instance
-        agent = BaseAgent(config=config, memory_manager=memory_manager)
-
-        # Store agent
-        active_agents[agent.agent_id] = agent
-
-        return AgentResponse(
-            agent_id=agent.agent_id,
-            name=agent.config.name,
-            description=agent.config.description,
-            status="active",
-            created_at=agent.created_at.isoformat(),
-            metadata={
-                "model_provider": agent.config.model_provider,
-                "model_name": agent.config.model_name,
-                "temperature": agent.config.temperature,
-            },
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create agent: {str(e)}",
-        ) from e
-
-
-@router.get("/", response_model=list[AgentResponse])
-async def list_agents() -> list[AgentResponse]:
-    """
-    List all active agents.
-
-    Returns:
-        List of active agents
-    """
-    agents = []
-
-    for agent_id, agent in active_agents.items():
-        agents.append(
-            AgentResponse(
-                agent_id=agent_id,
-                name=agent.config.name,
-                description=agent.config.description,
-                status="active",
-                created_at=agent.created_at.isoformat(),
-                metadata={
-                    "model_provider": agent.config.model_provider,
-                    "model_name": agent.config.model_name,
-                    "conversation_count": agent.conversation_count,
-                },
-            )
-        )
-
-    return agents
-
-
-@router.get("/{agent_id}", response_model=AgentResponse)
-async def get_agent(agent_id: str) -> AgentResponse:
-    """
-    Get details of a specific agent.
-
-    Args:
-        agent_id: Agent identifier
-
-    Returns:
-        Agent details
-    """
-    if agent_id not in active_agents:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
-
-    agent = active_agents[agent_id]
-
+def _to_response(agent) -> AgentResponse:
     return AgentResponse(
-        agent_id=agent_id,
-        name=agent.config.name,
-        description=agent.config.description,
-        status="active",
+        agent_id=agent.agent_id,
+        name=agent.name,
+        description=agent.description,
+        status=agent.status,
         created_at=agent.created_at.isoformat(),
         metadata={
-            "model_provider": agent.config.model_provider,
-            "model_name": agent.config.model_name,
-            "temperature": agent.config.temperature,
-            "max_tokens": agent.config.max_tokens,
-            "conversation_count": agent.conversation_count,
-            "enable_streaming": agent.config.enable_streaming,
+            "model_provider": agent.model_provider,
+            "model_name": agent.model_name,
+            "temperature": agent.temperature,
+            "max_tokens": agent.max_tokens,
+            "enable_streaming": agent.enable_streaming,
+            "database_name": agent.database_name,
+            "updated_at": agent.updated_at.isoformat(),
         },
     )
 
 
-@router.delete("/{agent_id}")
-async def delete_agent(agent_id: str) -> dict[str, str]:
-    """
-    Delete an agent.
+@router.post("/", response_model=AgentResponse)
+async def create_agent(request: CreateAgentRequest, app_request: Request) -> AgentResponse:
+    """Create and persist a new agent definition."""
+    registry = app_request.app.state.agent_registry
+    metadata = await registry.create_agent(request.model_dump())
+    return _to_response(metadata)
 
-    Args:
-        agent_id: Agent identifier
 
-    Returns:
-        Deletion confirmation
-    """
-    if agent_id not in active_agents:
+@router.get("/", response_model=list[AgentResponse])
+async def list_agents(app_request: Request) -> list[AgentResponse]:
+    """List all persisted agents."""
+    registry = app_request.app.state.agent_registry
+    return [_to_response(agent) for agent in await registry.list_agents()]
+
+
+@router.get("/{agent_id}", response_model=AgentResponse)
+async def get_agent(agent_id: str, app_request: Request) -> AgentResponse:
+    """Get a persisted agent definition."""
+    registry = app_request.app.state.agent_registry
+    metadata = await registry.get_metadata(agent_id)
+    if metadata is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found",
         )
+    return _to_response(metadata)
 
-    # Remove agent
-    del active_agents[agent_id]
+
+@router.delete("/{agent_id}")
+async def delete_agent(agent_id: str, app_request: Request) -> dict[str, str]:
+    """Delete an agent definition and any live runtime instance."""
+    registry = app_request.app.state.agent_registry
+    deleted = await registry.delete_agent(agent_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found",
+        )
 
     return {"status": "deleted", "agent_id": agent_id, "timestamp": datetime.now(UTC).isoformat()}
 
 
-@router.put("/{agent_id}/config")
+@router.put("/{agent_id}/config", response_model=AgentResponse)
 async def update_agent_config(
     agent_id: str,
-    temperature: float | None = None,
-    max_tokens: int | None = None,
-    system_prompt: str | None = None,
+    request: UpdateAgentRequest,
+    app_request: Request,
 ) -> AgentResponse:
-    """
-    Update agent configuration.
-
-    Args:
-        agent_id: Agent identifier
-        temperature: New temperature setting
-        max_tokens: New max tokens setting
-        system_prompt: New system prompt
-
-    Returns:
-        Updated agent details
-    """
-    if agent_id not in active_agents:
+    """Update mutable configuration for an agent."""
+    registry = app_request.app.state.agent_registry
+    try:
+        updated = await registry.update_agent(agent_id, request.model_dump(exclude_none=True))
+    except KeyError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Agent {agent_id} not found"
-        )
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found",
+        ) from exc
 
-    agent = active_agents[agent_id]
-
-    # Update configuration
-    if temperature is not None:
-        agent.config.temperature = temperature
-        agent.llm.temperature = temperature
-
-    if max_tokens is not None:
-        agent.config.max_tokens = max_tokens
-        agent.llm.max_tokens = max_tokens
-
-    if system_prompt is not None:
-        agent.config.system_prompt = system_prompt
-
-    return AgentResponse(
-        agent_id=agent_id,
-        name=agent.config.name,
-        description=agent.config.description,
-        status="active",
-        created_at=agent.created_at.isoformat(),
-        metadata={
-            "model_provider": agent.config.model_provider,
-            "model_name": agent.config.model_name,
-            "temperature": agent.config.temperature,
-            "max_tokens": agent.config.max_tokens,
-            "updated_at": datetime.now(UTC).isoformat(),
-        },
-    )
+    return _to_response(updated)

@@ -11,7 +11,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ..embeddings.voyage_client import get_embedding_service
-from ..retrieval.vector_search import VectorSearchEngine
+from ..retrieval.vector_search import SearchResult, VectorSearchEngine
 from .base import Memory, MemoryStore, MemoryType
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,27 @@ class EpisodicMemory(MemoryStore):
         self.collection = collection
         self.search_engine = VectorSearchEngine(collection)
         self.embedding_service = get_embedding_service()
+
+    async def _memory_from_search_result(
+        self, result: SearchResult, search_mode: str
+    ) -> Memory | None:
+        """Convert an aggregated search result into a Memory instance."""
+        doc = dict(result.document) if result.document else None
+        if doc is None and result.id:
+            doc = await self.collection.find_one({"_id": ObjectId(result.id)})
+        if not doc:
+            return None
+
+        doc = dict(doc)
+        if "_id" in doc:
+            doc["id"] = str(doc.pop("_id"))
+        elif result.id:
+            doc["id"] = result.id
+
+        memory = Memory(**doc)
+        memory.metadata["search_score"] = result.score
+        memory.metadata["search_mode"] = search_mode
+        return memory
 
     async def store(self, memory: Memory) -> str:
         """Store an episodic memory."""
@@ -119,17 +140,15 @@ class EpisodicMemory(MemoryStore):
                     filter_query=filter_query if filter_query else None,
                 )
 
-            # Convert results to Memory objects
+            # Convert results to Memory objects.
+            # For hybrid search, skip threshold: $rankFusion returns RRF scores (0.008-0.03)
+            # which are not comparable to cosine similarity scores (0-1).
+            # Results are already relevance-ranked by the search engine.
             memories = []
             for result in results:
-                if result.score >= threshold:
-                    # Fetch full document
-                    doc = await self.collection.find_one({"_id": ObjectId(result.id)})
-                    if doc:
-                        doc["id"] = str(doc.pop("_id"))
-                        memory = Memory(**doc)
-                        memory.metadata["search_score"] = result.score
-                        memory.metadata["search_mode"] = search_mode
+                if search_mode == "hybrid" or result.score >= threshold:
+                    memory = await self._memory_from_search_result(result, search_mode)
+                    if memory:
                         memories.append(memory)
 
             logger.debug(f"Retrieved {len(memories)} memories using {search_mode} search")

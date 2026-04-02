@@ -1,10 +1,12 @@
 version: '3.8'
 
 services:
-  # MongoDB Atlas is used in production, but local MongoDB for development
+  # Legacy fallback only.
+  # Preferred local developer flow is Atlas local via:
+  # atlas deployments setup awm-local --type LOCAL --force
   mongodb:
     image: mongo:7.0
-    container_name: agent-mongodb
+    container_name: agent-legacy-mongodb
     restart: unless-stopped
     ports:
       - "27017:27017"
@@ -22,6 +24,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    profiles:
+      - legacy_mongo
 
   # Redis for caching
   redis:
@@ -53,15 +57,17 @@ services:
     env_file:
       - .env
     environment:
-      - MONGODB_URI=mongodb://admin:password123@mongodb:27017/ai_agent_boilerplate?authSource=admin
+      - MONGODB_URI=${MONGODB_URI:-mongodb://admin:password123@host.docker.internal:27017/awm_local_validation?authSource=admin}
+      - MONGODB_VALIDATION_LANE=${MONGODB_VALIDATION_LANE:-developer_quickstart}
+      - MONGODB_DEVELOPER_QUICKSTART_DB_NAME=${MONGODB_DEVELOPER_QUICKSTART_DB_NAME:-awm_quickstart}
+      - MONGODB_LOCAL_VALIDATION_DB_NAME=${MONGODB_LOCAL_VALIDATION_DB_NAME:-awm_local_validation}
+      - MONGODB_CLOUD_VALIDATION_DB_NAME=${MONGODB_CLOUD_VALIDATION_DB_NAME:-awm_cloud_validation}
       - REDIS_URL=redis://redis:6379/0
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - API_WORKERS=4
       - LOG_LEVEL=INFO
     depends_on:
-      mongodb:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:

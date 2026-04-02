@@ -11,21 +11,20 @@ for async compatibility. Do NOT use deprecated asyncio.get_event_loop().
 
 import asyncio
 import logging
-import os
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Lazy imports: MongoDBSaver and MongoClient are imported at call time
-# to avoid import errors when langgraph-checkpoint-mongodb is not installed.
+# Lazy import: MongoDBSaver is imported at call time to avoid import errors
+# when langgraph-checkpoint-mongodb is not installed.
 MongoDBSaver = None
-MongoClient = None
+MongoClient = None  # Backward-compatible test seam
 
 
 def _ensure_imports():
@@ -33,10 +32,32 @@ def _ensure_imports():
     global MongoDBSaver, MongoClient
     if MongoDBSaver is None:
         from langgraph.checkpoint.mongodb import MongoDBSaver as _Saver
+
         MongoDBSaver = _Saver
     if MongoClient is None:
         from pymongo import MongoClient as _Client
+
         MongoClient = _Client
+
+
+def _resolve_sync_client(app_request: Request | None):
+    """Resolve a sync Mongo client from app state or environment."""
+    if app_request is not None:
+        sync_client = app_request.app.state.sync_mongo_client
+        if sync_client is not None:
+            return sync_client, False
+
+    import os
+
+    uri = os.getenv("MONGODB_URI")
+    if not uri:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="MongoDB not configured",
+        )
+
+    _ensure_imports()
+    return MongoClient(uri), True
 
 
 class StateSnapshot(BaseModel):
@@ -76,7 +97,9 @@ class ReplayResponse(BaseModel):
 @router.get("/history/{thread_id}", response_model=StateHistory)
 async def get_state_history(
     thread_id: str,
+    app_request: Request = None,
     limit: int = Query(default=50, ge=1, le=500),
+    agent_id: str | None = Query(default=None),
 ):
     """Get the full state history for a conversation thread.
 
@@ -91,46 +114,50 @@ async def get_state_history(
         Full state history with all checkpoints
     """
     try:
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
+        if not isinstance(agent_id, str):
+            agent_id = None
+        sync_client, should_close = _resolve_sync_client(app_request)
+
+        if agent_id and not thread_id.startswith(f"{agent_id}:"):
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="MongoDB not configured",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found for agent {agent_id}",
             )
 
         _ensure_imports()
 
         # MongoDBSaver is sync - wrap with asyncio.to_thread (Python 3.9+)
         def _get_history():
-            client = MongoClient(uri)
-            saver = MongoDBSaver(client)
-            config = {"configurable": {"thread_id": thread_id}}
+            try:
+                saver = MongoDBSaver(sync_client)
+                config = {"configurable": {"thread_id": thread_id}}
 
-            snapshots = []
-            for state in saver.get_state_history(config):
-                snapshots.append(
-                    {
-                        "checkpoint_id": state.config.get("configurable", {}).get(
-                            "checkpoint_id", ""
-                        ),
-                        "thread_id": thread_id,
-                        "timestamp": str(state.metadata.get("created_at", "")),
-                        "messages": [
-                            {
-                                "type": getattr(m, "type", "unknown"),
-                                "content": getattr(m, "content", ""),
-                            }
-                            for m in state.values.get("messages", [])
-                        ],
-                        "metadata": state.metadata or {},
-                    }
-                )
+                snapshots = []
+                for state in saver.get_state_history(config):
+                    snapshots.append(
+                        {
+                            "checkpoint_id": state.config.get("configurable", {}).get(
+                                "checkpoint_id", ""
+                            ),
+                            "thread_id": thread_id,
+                            "timestamp": str(state.metadata.get("created_at", "")),
+                            "messages": [
+                                {
+                                    "type": getattr(m, "type", "unknown"),
+                                    "content": getattr(m, "content", ""),
+                                }
+                                for m in state.values.get("messages", [])
+                            ],
+                            "metadata": state.metadata or {},
+                        }
+                    )
 
-                if len(snapshots) >= limit:
-                    break
-
-            client.close()
-            return snapshots
+                    if len(snapshots) >= limit:
+                        break
+                return snapshots
+            finally:
+                if should_close:
+                    sync_client.close()
 
         snapshots = await asyncio.to_thread(_get_history)
 
@@ -154,6 +181,8 @@ async def get_state_history(
 async def get_state_snapshot(
     thread_id: str,
     checkpoint_id: str,
+    app_request: Request = None,
+    agent_id: str | None = Query(default=None),
 ):
     """Get a specific state snapshot by checkpoint ID.
 
@@ -165,45 +194,49 @@ async def get_state_snapshot(
         The state at that checkpoint
     """
     try:
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
+        if not isinstance(agent_id, str):
+            agent_id = None
+        sync_client, should_close = _resolve_sync_client(app_request)
+
+        if agent_id and not thread_id.startswith(f"{agent_id}:"):
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="MongoDB not configured",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found for agent {agent_id}",
             )
 
         _ensure_imports()
 
         def _get_snapshot():
-            client = MongoClient(uri)
-            saver = MongoDBSaver(client)
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_id": checkpoint_id,
-                }
-            }
-
-            state = saver.get(config)
-            if not state:
-                return None
-
-            snapshot = {
-                "checkpoint_id": checkpoint_id,
-                "thread_id": thread_id,
-                "timestamp": str(state.metadata.get("created_at", "")),
-                "messages": [
-                    {
-                        "type": getattr(m, "type", "unknown"),
-                        "content": getattr(m, "content", ""),
+            try:
+                saver = MongoDBSaver(sync_client)
+                config = {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_id": checkpoint_id,
                     }
-                    for m in state.values.get("messages", [])
-                ],
-                "metadata": state.metadata or {},
-            }
+                }
 
-            client.close()
-            return snapshot
+                state = saver.get(config)
+                if not state:
+                    return None
+
+                snapshot = {
+                    "checkpoint_id": checkpoint_id,
+                    "thread_id": thread_id,
+                    "timestamp": str(state.metadata.get("created_at", "")),
+                    "messages": [
+                        {
+                            "type": getattr(m, "type", "unknown"),
+                            "content": getattr(m, "content", ""),
+                        }
+                        for m in state.values.get("messages", [])
+                    ],
+                    "metadata": state.metadata or {},
+                }
+                return snapshot
+            finally:
+                if should_close:
+                    sync_client.close()
 
         snapshot = await asyncio.to_thread(_get_snapshot)
 
@@ -230,6 +263,8 @@ async def replay_from_checkpoint(
     thread_id: str,
     checkpoint_id: str,
     request: ReplayRequest,
+    app_request: Request = None,
+    agent_id: str | None = Query(default=None),
 ):
     """Replay from a specific checkpoint with a new message.
 
@@ -244,29 +279,35 @@ async def replay_from_checkpoint(
         ReplayResponse with new thread_id for the branched conversation
     """
     try:
-        uri = os.getenv("MONGODB_URI")
-        if not uri:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="MongoDB not configured",
-            )
+        if not isinstance(agent_id, str):
+            agent_id = None
+        sync_client, should_close = _resolve_sync_client(app_request)
 
         _ensure_imports()
+
+        if agent_id and not thread_id.startswith(f"{agent_id}:"):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thread {thread_id} not found for agent {agent_id}",
+            )
+
         new_thread_id = f"{thread_id}-replay-{uuid.uuid4().hex[:8]}"
 
         # Verify the checkpoint exists
         def _verify_checkpoint():
-            client = MongoClient(uri)
-            saver = MongoDBSaver(client)
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "checkpoint_id": checkpoint_id,
+            try:
+                saver = MongoDBSaver(sync_client)
+                config = {
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "checkpoint_id": checkpoint_id,
+                    }
                 }
-            }
-            state = saver.get(config)
-            client.close()
-            return state is not None
+                state = saver.get(config)
+                return state is not None
+            finally:
+                if should_close:
+                    sync_client.close()
 
         exists = await asyncio.to_thread(_verify_checkpoint)
         if not exists:

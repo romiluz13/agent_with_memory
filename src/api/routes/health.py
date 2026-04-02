@@ -7,7 +7,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from ...storage.mongodb_client import mongodb_client
 
@@ -35,7 +35,7 @@ async def liveness_probe() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def readiness_probe() -> dict[str, Any]:
+async def readiness_probe(app_request: Request) -> dict[str, Any]:
     """
     Kubernetes readiness probe.
     Checks if all dependencies are ready.
@@ -52,9 +52,7 @@ async def readiness_probe() -> dict[str, Any]:
         if os.getenv("VOYAGE_API_KEY"):
             checks["embeddings"] = True
 
-        # Check memory system
-        # This would check if memory manager is initialized
-        checks["memory_system"] = True
+        checks["memory_system"] = app_request.app.state.memory_manager is not None
 
         # Overall status
         all_ready = all(checks.values())
@@ -75,24 +73,32 @@ async def readiness_probe() -> dict[str, Any]:
 
 
 @router.get("/stats")
-async def system_stats() -> dict[str, Any]:
+async def system_stats(app_request: Request) -> dict[str, Any]:
     """Get system statistics."""
     try:
         # Get MongoDB stats
         db_stats = await mongodb_client.health_check()
 
-        # Get memory stats (would come from memory manager)
-        memory_stats = {"total_memories": 0, "cache_hit_rate": 0.0}
+        runtime = app_request.app.state.runtime
+        memory_stats = (
+            await runtime.memory_manager.get_stats()
+            if runtime.memory_manager is not None
+            else {"total_memories": 0, "cache_hit_rate": 0.0}
+        )
 
-        # Get connection stats
-        connection_stats = {"active_agents": 0, "active_connections": 0}
+        connection_stats = {
+            "active_agents": len(runtime.agent_registry._metadata_cache),
+            **runtime.websocket_manager.get_connection_stats(),
+        }
 
         return {
             "timestamp": datetime.now(UTC).isoformat(),
             "database": db_stats,
             "memory": memory_stats,
             "connections": connection_stats,
-            "uptime_seconds": 0,  # Would calculate actual uptime
+            "uptime_seconds": int(
+                (datetime.now(UTC) - app_request.app.state.started_at).total_seconds()
+            ),
         }
 
     except Exception as e:

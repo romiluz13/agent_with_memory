@@ -13,7 +13,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ..embeddings.voyage_client import get_embedding_service
-from ..retrieval.vector_search import VectorSearchEngine
+from ..retrieval.vector_search import SearchResult, VectorSearchEngine
 from .base import Memory, MemoryStore, MemoryType
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,24 @@ class SummaryMemory(MemoryStore):
         self.collection = collection
         self.search_engine = VectorSearchEngine(collection)
         self.embedding_service = get_embedding_service()
+
+    async def _memory_from_search_result(self, result: SearchResult) -> Memory | None:
+        """Convert an aggregated search result into a Memory instance."""
+        doc = dict(result.document) if result.document else None
+        if doc is None and result.id:
+            doc = await self.collection.find_one({"_id": ObjectId(result.id)})
+        if not doc:
+            return None
+
+        doc = dict(doc)
+        if "_id" in doc:
+            doc["id"] = str(doc.pop("_id"))
+        elif result.id:
+            doc["id"] = result.id
+
+        memory = Memory(**doc)
+        memory.metadata["search_score"] = result.score
+        return memory
 
     async def store(self, memory: Memory) -> str:
         """Store a summary memory."""
@@ -155,14 +173,12 @@ class SummaryMemory(MemoryStore):
                     filter_query=filter_query,
                 )
 
+            # Skip threshold for hybrid: $rankFusion RRF scores are not comparable to cosine.
             memories = []
             for result in results:
-                if result.score >= threshold:
-                    doc = await self.collection.find_one({"_id": ObjectId(result.id)})
-                    if doc:
-                        doc["id"] = str(doc.pop("_id"))
-                        memory = Memory(**doc)
-                        memory.metadata["search_score"] = result.score
+                if search_mode == "hybrid" or result.score >= threshold:
+                    memory = await self._memory_from_search_result(result)
+                    if memory:
                         memories.append(memory)
 
             return memories

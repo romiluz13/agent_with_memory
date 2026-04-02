@@ -53,6 +53,22 @@ def create_ttl_index(collection, field="ttl"):
         return False
 
 
+def create_standard_index(collection, keys, name):
+    """Create a standard B-tree index if it does not already exist."""
+    print(f"  Creating standard index '{name}' on {collection.name}...")
+    try:
+        result = collection.create_index(keys, name=name)
+        print(f"    ✅ Standard index created: {result}")
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "already exists" in error_msg or "IndexOptionsConflict" in error_msg:
+            print(f"    ✅ Standard index '{name}' already exists")
+            return True
+        print(f"    ❌ Error creating standard index: {e}")
+        return False
+
+
 def create_vector_search_index(collection, index_name="vector_index", dimensions=1024):
     """Create vector search index if it doesn't exist."""
     print(f"  Creating vector search index '{index_name}' on {collection.name}...")
@@ -133,8 +149,8 @@ def create_text_search_index(collection, index_name="text_search_index"):
                     "analyzer": "lucene.standard",
                 },
                 "metadata.tags": {"type": "string"},
-                "agent_id": {"type": "string"},
-                "user_id": {"type": "string"},
+                "agent_id": {"type": "token"},
+                "user_id": {"type": "token"},
             },
         }
     }
@@ -233,10 +249,18 @@ def setup_indexes():
 
             # Create TTL index for collections that use TTL
             # mongodb-query-optimizer: TTL indexes auto-remove expired documents
-            if collection_name in ("working_memories", "cache_memories"):
+            if collection_name in ("episodic_memories", "working_memories", "cache_memories"):
                 create_ttl_index(collection, field="ttl")
 
             print()
+
+        print("📦 approval_requests:")
+        create_standard_index(
+            db["approval_requests"],
+            [("agent_id", 1), ("status", 1), ("created_at", -1)],
+            "approval_requests_agent_status_created_at",
+        )
+        print()
 
         # Summary
         print("=" * 60)
