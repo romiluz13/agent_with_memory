@@ -192,3 +192,24 @@ tests/integration/test_focused_debug.py
 
 # Internal roadmap (not for public repo)
 roadmap.md
+
+# Internal audit/validation test files
+tests/memory/test_phase*.py
+tests/memory/test_isolation*.py
+tests/test_phase*.py
+
+# Internal plans and docs
+docs/plans/
+
+# AI agent configs (Codex, Agents.md, etc.)
+.agents/
+.codex/
+AGENTS.md
+
+# Internal validation scripts
+scripts/bootstrap_local_deployment.py
+scripts/validate_atlas_local_preview.py
+scripts/seed_realistic_data.py
+scripts/run_seeded_validation.py
+scripts/test_grove_gateway.py
+scripts/test_llm_gateway.py
